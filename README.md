@@ -1,6 +1,6 @@
 # barkAI
-BarkAI — An interactive, RAG-powered AI agent acting as a personal career assistant and technical interviewer. Built with Django Ninja, Groq (Qwen 2.5), and Flutter.
-for The front-end part click the link (...)
+BarkAI — An interactive, RAG-powered AI agent acting as a personal career assistant and technical interviewer. Built with Django Ninja, Groq (Qwen 2.5), and Tailwind CSS.
+A future mobile app version built with Flutter is under evaluation.
 
 # 🐶 BarkAI — Interactive AI Career Agent & Technical Assistant
 
@@ -22,7 +22,7 @@ The project mascot is **Barkley**, an AI-powered Cocker Spaniel developer who "f
 * **Backend:** Django Ninja (Async REST API & ORM)
 * **LLM Engine:** Groq API (`Qwen 2.5 32B`)
 * **Knowledge Retrieval:** RAG pipeline (Indexing GitHub repos, Markdown career docs, and project architecture)
-* **Frontend:** Interactive Web Chat (Flutter / Web interface)
+* **Frontend:** Interactive Web Chat (Django Templates + Tailwind CSS)
 * **Human-in-the-Loop & Intent Detection:** Automatic intent classification for interview requests with real-time email/push notification triggers.
 
 ---
