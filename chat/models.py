@@ -1,0 +1,59 @@
+"""Data models for the chat application.
+
+A ``ChatSession`` represents one recruiter conversation; ``ChatMessage`` stores
+the individual user/assistant turns that belong to that session.
+"""
+import uuid
+
+from django.db import models
+
+
+class ChatSession(models.Model):
+    """A persistent, login-free conversation identified by a public UUID."""
+
+    class Meta:
+        ordering = ["-last_active"]
+
+    session_id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        verbose_name="Session ID",
+    )
+    hr_name = models.CharField("Recruiter name", max_length=120, blank=True)
+    hr_email = models.EmailField("Recruiter email", blank=True)
+    company_name = models.CharField("Company name", max_length=160, blank=True)
+    interview_requested = models.BooleanField(
+        "Interview requested",
+        default=False,
+        help_text="True once the recruiter has asked to schedule an interview.",
+    )
+    created_at = models.DateTimeField("Created at", auto_now_add=True)
+    last_active = models.DateTimeField("Last active", auto_now=True)
+
+    def __str__(self) -> str:
+        return str(self.session_id)
+
+
+class ChatMessage(models.Model):
+    """One user or assistant turn inside a ``ChatSession``."""
+
+    class Sender(models.TextChoices):
+        USER = "user", "User"
+        ASSISTANT = "assistant", "Barkley (assistant)"
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    session = models.ForeignKey(
+        ChatSession,
+        on_delete=models.CASCADE,
+        related_name="messages",
+        db_index=True,
+    )
+    sender = models.CharField("Sender", max_length=16, choices=Sender.choices)
+    content = models.TextField("Content")
+    created_at = models.DateTimeField("Created at", auto_now_add=True, db_index=True)
+
+    def __str__(self) -> str:
+        return f"{self.get_sender_display()}: {self.content[:60]}"

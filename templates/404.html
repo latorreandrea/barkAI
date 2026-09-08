@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}404 Page Not Found{% endblock %}
+
+{% block content %}
+    <div class="flex h-full w-full flex-col items-center justify-center gap-6 px-6 py-12 text-center">
+        <div class="flex h-28 w-28 items-center justify-center rounded-full bg-white/5 text-6xl ring-1 ring-white/10">🐶</div>
+        <div>
+            <p class="text-xs font-semibold uppercase tracking-widest text-indigo-300">Error 404</p>
+            <h1 class="mt-2 text-3xl font-bold">Page Not Found</h1>
+            <p class="mx-auto mt-3 max-w-md text-sm leading-relaxed text-slate-400">
+                Woof! Barkley sniffed around but could not find that page. It may have moved or never existed.
+            </p>
+        </div>
+        <a href="/" class="rounded-2xl bg-indigo-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-400">Back to home</a>
+    </div>
+{% endblock %}

@@ -1,0 +1,331 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}barkAI — Chat with Barkley 🐾{% endblock %}
+
+{# data-session-id: optional UUID from ?session_id= ; data-media-url: /static/mascot/ #}
+{% block body_attrs %}
+    data-session-id="{{ initial_session_id|default:'' }}"
+    data-media-url="{% static 'mascot/' %}"
+{% endblock %}
+
+{% block content %}
+    {# Hidden input + cookie used by fetch() for the CSRF-protected JSON POSTs. #}
+    {% csrf_token %}
+
+    {# ------------------------------------------------------------------ #}
+    {# SOLUTION 1 LAYOUT: flex-col on mobile, md:flex-row on desktop        #}
+    {# ------------------------------------------------------------------ #}
+    <div class="mx-auto flex h-full w-full max-w-[1600px] flex-col md:flex-row">
+
+        {# ---------------- MOBILE: compact sticky top header ------------- #}
+        <header class="z-30 flex w-full shrink-0 items-center gap-3 border-b border-white/10 bg-slate-900/95 px-3 py-2 shadow-lg backdrop-blur md:hidden">
+            <div class="js-video-shell relative h-20 w-20 shrink-0 overflow-hidden rounded-full bg-indigo-950 ring-2 ring-indigo-400/80 shadow-md">
+                <video class="js-barkley-video h-full w-full object-cover" autoplay muted loop playsinline preload="auto"></video>
+                <div class="video-fallback hidden h-full w-full items-center justify-center text-4xl">🐶</div>
+            </div>
+            <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                    <p class="truncate text-base font-bold">Barkley</p>
+                    <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+                        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400"></span>Online
+                    </span>
+                </div>
+                <p class="truncate text-xs leading-snug text-slate-300" data-barkley-status>Barkley is ready — ask me anything!</p>
+            </div>
+        </header>
+
+        {# ---------------- DESKTOP: left 1/3 mascot panel ---------------- #}
+        <aside class="hidden shrink-0 flex-col items-center justify-center gap-6 bg-slate-900/40 px-6 py-8 md:flex md:w-1/3 md:border-r md:border-white/10">
+            <div class="js-video-shell relative aspect-square w-64 overflow-hidden rounded-3xl bg-indigo-950 shadow-2xl ring-4 ring-indigo-400/20">
+                <video class="js-barkley-video h-full w-full object-cover" autoplay muted loop playsinline preload="auto"></video>
+                <div class="video-fallback hidden h-full w-full items-center justify-center text-8xl">🐶</div>
+            </div>
+            <div class="w-64 text-center">
+                <div class="inline-flex items-center gap-2 rounded-full bg-indigo-500/10 px-3 py-1 text-xs font-medium text-indigo-300">
+                    <span class="h-2 w-2 shrink-0 animate-pulse rounded-full bg-indigo-400"></span>
+                    <span data-barkley-status>Barkley is ready — ask me anything!</span>
+                </div>
+                <p class="mt-4 text-xs leading-relaxed text-slate-400">
+                    Barkley is Andrea's AI career companion. Ask about her Python/Django
+                    experience, open-source projects or RAG pipelines — or request an interview.
+                </p>
+            </div>
+        </aside>
+
+        {# ---------------- RIGHT: chat panel (2/3 width) ----------------- #}
+        <main class="flex min-h-0 w-full flex-1 flex-col md:w-2/3">
+
+            <!-- Slim desktop-only header row -->
+            <div class="hidden shrink-0 items-center justify-between gap-4 border-b border-white/10 px-6 py-3 md:flex">
+                <div>
+                    <h1 class="text-base font-bold">Chat with Barkley</h1>
+                    <p class="text-xs text-slate-400">No sign-up needed — your conversation persists through this link.</p>
+                </div>
+                <a href="/api/docs/" target="_blank" rel="noopener noreferrer"
+                   class="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-white/5">
+                    API docs
+                </a>
+            </div>
+
+            <!-- Scrollable message history -->
+            <section id="message-thread" aria-live="polite"
+                     class="flex-1 space-y-4 overflow-y-auto px-4 py-5 md:px-8"></section>
+
+            <!-- Sticky bottom composer -->
+            <footer class="shrink-0 border-t border-white/10 bg-slate-900/80 px-4 py-3 backdrop-blur md:px-6">
+                <form id="chat-form" class="flex items-center gap-2" autocomplete="off">
+                    <label for="chat-input" class="sr-only">Message Barkley</label>
+                    <input id="chat-input" name="message" type="text" required maxlength="2000"
+                           placeholder="Ask Barkley about Andrea's experience…"
+                           class="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-800/80 px-4 py-3 text-sm text-slate-100 placeholder-slate-500 outline-none transition focus:border-indigo-400/60 focus:ring-2 focus:ring-indigo-400/30 disabled:opacity-50" />
+                    <button id="chat-send" type="submit"
+                            class="shrink-0 rounded-2xl bg-indigo-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-400 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50">
+                        Send
+                    </button>
+                </form>
+                <p class="mt-2 text-center text-[11px] text-slate-500">
+                    Demo mode — replies are mocked until the Groq/RAG service is connected.
+                    <span class="hidden sm:inline">Session: <span id="session-chip" class="font-mono text-slate-400"></span></span>
+                </p>
+            </footer>
+        </main>
+
+    </div>
+{% endblock %}
+
+{% block postloadjs %}
+    <script>
+        (function () {
+            "use strict";
+
+            // ============================================================== //
+            // 1) SESSION: reuse ?session_id= when given, otherwise generate    //
+            //    and persist a UUID in localStorage (chat survives reloads).   //
+            // ============================================================== //
+            var STORAGE_KEY = "barkai.session_id";
+            var bodyEl = document.body;
+
+            function generateSessionId() {
+                if (window.crypto && typeof window.crypto.randomUUID === "function") {
+                    return window.crypto.randomUUID();
+                }
+                // RFC4122 v4 fallback for browsers without crypto.randomUUID.
+                return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+                    var r = (Math.random() * 16) | 0;
+                    var v = c === "x" ? r : (r & 0x3) | 0x8;
+                    return v.toString(16);
+                });
+            }
+
+            var sessionId = bodyEl.getAttribute("data-session-id") || localStorage.getItem(STORAGE_KEY);
+            if (!sessionId) {
+                sessionId = generateSessionId();
+            }
+            localStorage.setItem(STORAGE_KEY, sessionId);
+
+            // ============================================================== //
+            // 2) DOM REFERENCES                                                //
+            // ============================================================== //
+            var mediaUrl = bodyEl.getAttribute("data-media-url"); // e.g. "/static/mascot/"
+            var videos = Array.prototype.slice.call(document.querySelectorAll("video.js-barkley-video"));
+            var statusEls = Array.prototype.slice.call(document.querySelectorAll("[data-barkley-status]"));
+            var threadEl = document.getElementById("message-thread");
+            var formEl = document.getElementById("chat-form");
+            var inputEl = document.getElementById("chat-input");
+            var sendBtn = document.getElementById("chat-send");
+            var sessionChip = document.getElementById("session-chip");
+
+            if (sessionChip) {
+                sessionChip.textContent = sessionId.slice(0, 8) + "…";
+            }
+
+            // ============================================================== //
+            // 3) BARKLEY STATE MACHINE: swaps <video src> + status label.      //
+            // ============================================================== //
+            var STATES = {
+                idle: "Barkley is ready — ask me anything!",
+                searching: "Barkley is searching repositories…",
+                typing: "Barkley is typing…",
+                speaking: "Barkley is speaking…",
+                celebrating: "Barkley found an interview opportunity! 🎉"
+            };
+
+            function setBarkleyState(state) {
+                if (!STATES.hasOwnProperty(state)) {
+                    state = "idle";
+                }
+                var src = mediaUrl + state + ".mp4";
+                videos.forEach(function (video) {
+                    var shell = video.closest(".js-video-shell");
+                    if (shell) {
+                        shell.classList.remove("is-missing");
+                    }
+                    if (video.getAttribute("src") !== src) {
+                        // Swap Barkley's reaction video, e.g. searching.mp4 while the
+                        // API works, then speaking.mp4 / celebrating.mp4 on reply.
+                        video.setAttribute("src", src);
+                        video.load();
+                        video.play()["catch"](function () {
+                            /* Autoplay can be blocked before the first user gesture. */
+                        });
+                    }
+                });
+                statusEls.forEach(function (el) {
+                    el.textContent = STATES[state];
+                });
+            }
+
+            // When a reaction MP4 is missing, show the emoji fallback instead of a black frame.
+            videos.forEach(function (video) {
+                video.addEventListener("error", function () {
+                    var shell = video.closest(".js-video-shell");
+                    if (shell) {
+                        shell.classList.add("is-missing");
+                    }
+                });
+            });
+
+            // ============================================================== //
+            // 4) MESSAGE RENDERING (textContent => safe against injection)     //
+            // ============================================================== //
+            function addMessage(sender, content) {
+                var isUser = sender === "user";
+                var row = document.createElement("div");
+                row.className = "flex " + (isUser ? "justify-end" : "justify-start");
+
+                var bubble = document.createElement("div");
+                bubble.className = "max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-md md:max-w-[75%] " +
+                    (isUser ? "rounded-br-sm bg-indigo-500 text-white"
+                            : "rounded-bl-sm bg-white/10 text-slate-100 ring-1 ring-white/10");
+
+                var meta = document.createElement("div");
+                meta.className = "mb-1 text-[10px] font-semibold uppercase tracking-wide " +
+                    (isUser ? "text-indigo-200" : "text-indigo-300/80");
+                meta.textContent = isUser ? "You" : "Barkley 🐾";
+
+                var text = document.createElement("p");
+                text.textContent = content; // textContent prevents HTML injection.
+
+                bubble.appendChild(meta);
+                bubble.appendChild(text);
+                row.appendChild(bubble);
+                threadEl.appendChild(row);
+                scrollToBottom();
+            }
+
+            function scrollToBottom() {
+                threadEl.scrollTop = threadEl.scrollHeight;
+            }
+
+            // ============================================================== //
+            // 5) CSRF HELPER (Django cookie set by the {% csrf_token %} tag)   //
+            // ============================================================== //
+            function getCookie(name) {
+                var prefix = name + "=";
+                var parts = document.cookie.split(";");
+                for (var i = 0; i < parts.length; i++) {
+                    var part = parts[i].trim();
+                    if (part.indexOf(prefix) === 0) {
+                        return decodeURIComponent(part.slice(prefix.length));
+                    }
+                }
+                return null;
+            }
+
+            // ============================================================== //
+            // 6) SEND MESSAGE -> POST /api/chat/send                           //
+            // ============================================================== //
+            function setBusy(busy) {
+                formEl.dataset.busy = busy ? "true" : "false";
+                inputEl.disabled = busy;
+                sendBtn.disabled = busy;
+                if (!busy) {
+                    inputEl.focus();
+                }
+            }
+
+            async function sendMessage() {
+                var text = inputEl.value.trim();
+                if (!text || formEl.dataset.busy === "true") {
+                    return;
+                }
+
+                addMessage("user", text);
+                inputEl.value = "";
+                setBusy(true);
+                setBarkleyState("searching"); // Barkley visibly searches while the API works.
+
+                try {
+                    var response = await fetch("/api/chat/send", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-CSRFToken": getCookie("csrftoken")
+                        },
+                        body: JSON.stringify({
+                            session_id: sessionId,
+                            message: text
+                        })
+                    });
+                    if (!response.ok) {
+                        throw new Error("server returned HTTP " + response.status);
+                    }
+                    var data = await response.json();
+                    addMessage("assistant", data.reply);
+                    // Interview requests make Barkley celebrate; everything else = speaking.
+                    setBarkleyState(data.interview_requested ? "celebrating" : "speaking");
+                } catch (err) {
+                    addMessage("assistant", "Woof… sorry, I could not reach my backend (" + err.message + "). Please try again.");
+                    setBarkleyState("idle");
+                } finally {
+                    setBusy(false);
+                }
+            }
+
+            // ============================================================== //
+            // 7) BOOTSTRAP: load persisted history for this session.           //
+            // ============================================================== //
+            async function init() {
+                setBarkleyState("idle");
+                try {
+                    var response = await fetch("/api/chat/history/" + encodeURIComponent(sessionId));
+                    if (!response.ok) {
+                        throw new Error("server returned HTTP " + response.status);
+                    }
+                    var data = await response.json();
+
+                    if (data.messages.length === 0) {
+                        addMessage(
+                            "assistant",
+                            "Woof! 👋 I'm Barkley, Andrea's AI career companion. Ask me about her open-source projects, Python/Django experience, or RAG pipelines — or request an interview right here!"
+                        );
+                    } else {
+                        data.messages.forEach(function (message) {
+                            addMessage(message.sender, message.content);
+                        });
+                    }
+                    if (data.interview_requested) {
+                        setBarkleyState("celebrating");
+                    }
+                } catch (err) {
+                    addMessage("assistant", "Woof… I could not load the conversation history (" + err.message + ").");
+                }
+            }
+
+            // ============================================================== //
+            // 8) EVENT WIRING                                                  //
+            // ============================================================== //
+            formEl.addEventListener("submit", function (event) {
+                event.preventDefault();
+                sendMessage();
+            });
+
+            if (document.readyState === "loading") {
+                document.addEventListener("DOMContentLoaded", init);
+            } else {
+                init();
+            }
+        })();
+    </script>
+{% endblock %}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}500 Internal Server Error{% endblock %}
+
+{% block content %}
+    <div class="flex h-full w-full flex-col items-center justify-center gap-6 px-6 py-12 text-center">
+        <div class="flex h-28 w-28 items-center justify-center rounded-full bg-white/5 text-6xl ring-1 ring-white/10">😵</div>
+        <div>
+            <p class="text-xs font-semibold uppercase tracking-widest text-indigo-300">Error 500</p>
+            <h1 class="mt-2 text-3xl font-bold">Internal Server Error</h1>
+            <p class="mx-auto mt-3 max-w-md text-sm leading-relaxed text-slate-400">
+                Something went wrong on our side. Barkley has been notified - please try again in a few moments.
+            </p>
+        </div>
+        <a href="/" class="rounded-2xl bg-indigo-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:bg-indigo-400">Back to home</a>
+    </div>
+{% endblock %}

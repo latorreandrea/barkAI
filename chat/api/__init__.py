@@ -1,0 +1,1 @@
+"""Django Ninja API package for the chat application."""

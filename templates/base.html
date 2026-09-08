@@ -1,0 +1,84 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    {% block meta %}
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+        {# Inline dog-emoji favicon keeps the setup asset-free. Replace with real #}
+        {# static/img/favicon/ files (favicon.ico, 32x32, 16x16, apple-touch-icon) #}
+        {# as soon as a proper logo is available. #}
+        <link rel="shortcut icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%B6%3C/text%3E%3C/svg%3E">
+    {% endblock %}
+
+    {% block extra_meta %}
+        <meta name="description" content="barkAI - an interactive AI career agent. Recruiters can chat with Barkley, ask about Andrea's projects, and request an interview.">
+        <meta name="keywords" content="barkAI, Barkley, AI career agent, recruiter chat, Django Ninja, Tailwind CSS">
+    {% endblock %}
+
+    {# Core styling: Tailwind Play CDN keeps local development instant. Compile #}
+    {# a static stylesheet with the Tailwind CLI before deploying to production. #}
+    {% block corecss %}
+        <script src="https://cdn.tailwindcss.com"></script>
+    {% endblock %}
+
+    {% block extra_css %}
+        <style>
+            /* When a Barkley reaction MP4 is missing, show the emoji fallback. */
+            .js-video-shell.is-missing video { display: none; }
+            .js-video-shell.is-missing .video-fallback { display: flex; }
+            /* Subtle custom scrollbar for the message thread. */
+            #message-thread::-webkit-scrollbar { width: 8px; }
+            #message-thread::-webkit-scrollbar-track { background: transparent; }
+            #message-thread::-webkit-scrollbar-thumb { background: rgb(99 102 241 / 0.4); border-radius: 999px; }
+        </style>
+    {% endblock %}
+
+    {% block corejs %}
+    {% endblock %}
+
+    {% block extra_js %}
+    {% endblock %}
+
+    <title>
+        {% block title %}barkAI - Chat with Barkley{% endblock %}
+        {% block extra_title %}{% endblock %}
+    </title>
+</head>
+{# Global shell: full-height, dark indigo gradient. Pages can append their own #}
+{# classes via body_class and attributes (e.g. data-*) via body_attrs.       #}
+<body class="h-screen overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 font-sans text-slate-100 antialiased{% block body_class %}{% endblock %}"{% block body_attrs %}{% endblock %}>
+
+    {% block header %}
+    {% endblock %}
+
+    {# Django messages rendered as Tailwind toast-style notifications. #}
+    {% if messages %}
+        <div class="message-container pointer-events-none fixed inset-x-0 top-3 z-50 flex flex-col items-center gap-2 px-4">
+            {% for message in messages %}
+                {% with message.level as level %}
+                    {% if level == 40 %}
+                        {% include 'includes/toasts/error.html' %}
+                    {% else %}
+                        {% include 'includes/toasts/success.html' %}
+                    {% endif %}
+                {% endwith %}
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    {% block page_header %}
+    {% endblock %}
+
+    {% block content %}
+    {% endblock %}
+
+    {% block footer %}
+    {% endblock %}
+
+    {% block postloadjs %}
+    {% endblock %}
+</body>
+</html>

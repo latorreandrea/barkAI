@@ -1,0 +1,7 @@
+{# Success toast bubble - included by base.html for each Django success/info message. #}
+<div class="pointer-events-auto flex w-full max-w-md items-center gap-3 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-medium text-white shadow-xl" role="status">
+    <span aria-hidden="true" class="shrink-0 text-base">✅</span>
+    <p class="min-w-0 flex-1">{{ message }}</p>
+    <button type="button" aria-label="Dismiss notification" onclick="this.parentElement.remove()"
+            class="shrink-0 rounded-full p-1 text-white/70 transition hover:bg-white/10 hover:text-white">✕</button>
+</div>
