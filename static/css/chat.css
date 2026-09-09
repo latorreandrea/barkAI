@@ -1,0 +1,39 @@
+/* Chat-page-only CSS: onboarding overlay choreography, word-by-word typewriter
+ * fade and the intermittent "keep chatting" pulse. Loaded exclusively by
+ * chat/templates/chat/index.html (block extra_css), never by error pages.
+ * The Tailwind utility layer stays in the shared barkai.css build.
+ */
+
+/* ---- Onboarding overlay: smooth slide-out towards the chat view. ---- */
+#hero-onboarding {
+    transition: transform .9s cubic-bezier(.22, 1, .36, 1), opacity .7s ease;
+    will-change: transform, opacity;
+}
+#hero-onboarding.is-leaving { transform: translateY(-100%); opacity: 0; }
+#hero-onboarding.is-leaving .hero-reveal { animation: heroFadeOut .5s ease forwards; }
+
+/* ---- Staggered reveal: hero texts fade in step by step. ---- */
+.hero-reveal { opacity: 0; }
+#hero-onboarding.is-ready .hero-reveal { animation: heroFadeUp .8s cubic-bezier(.22, 1, .36, 1) forwards; }
+#hero-onboarding.is-ready .delay-1 { animation-delay: .1s; }
+#hero-onboarding.is-ready .delay-2 { animation-delay: .55s; }
+#hero-onboarding.is-ready .delay-3 { animation-delay: 1.2s; }
+@keyframes heroFadeUp {
+    from { opacity: 0; transform: translateY(18px) scale(.98); }
+    to   { opacity: 1; transform: none; }
+}
+@keyframes heroFadeOut {
+    from { opacity: 1; transform: none; }
+    to   { opacity: 0; transform: translateY(-12px); }
+}
+
+/* ---- Word-by-word typewriter fade for BarklAI's messages. ---- */
+.word-fade { opacity: 0; animation: wordIn .3s ease forwards; }
+@keyframes wordIn { to { opacity: 1; } }
+
+/* ---- Intermittent pulsing "keep chatting" invitation. ---- */
+#chat-prompt { animation: promptBreathe 2.6s ease-in-out infinite; }
+@keyframes promptBreathe {
+    0%, 100% { opacity: .25; }
+    50%      { opacity: 1; }
+}

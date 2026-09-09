@@ -2,11 +2,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    {% block meta %}
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
 
+    {% block meta %}
         {# Inline dog-emoji favicon keeps the setup asset-free. Replace with real #}
         {# static/img/favicon/ files (favicon.ico, 32x32, 16x16, apple-touch-icon) #}
         {# as soon as a proper logo is available. #}
@@ -14,49 +14,53 @@
     {% endblock %}
 
     {% block extra_meta %}
-        <meta name="description" content="barkAI - an interactive AI career agent. Recruiters can chat with Barkley, ask about Andrea's projects, and request an interview.">
-        <meta name="keywords" content="barkAI, Barkley, AI career agent, recruiter chat, Django Ninja, Tailwind CSS">
+        <meta name="description" content="BarkAI - an interactive AI career agent. Recruiters can chat with BarklAI, ask about Andrea's projects, and request an interview.">
+        <meta name="keywords" content="BarkAI, BarklAI, AI career agent, recruiter chat, Django Ninja, Tailwind CSS">
     {% endblock %}
 
-    {# Core styling: Tailwind Play CDN keeps local development instant. Compile #}
-    {# a static stylesheet with the Tailwind CLI before deploying to production. #}
+    {# Core styling: Google Fonts (Inter) + ONE compiled, minified stylesheet   #}
+    {# (Tailwind utilities + site-wide custom CSS). Built from static/css/       #}
+    {# source.css via `npm run css:build` — no runtime CDN, no inline styles.    #}
     {% block corecss %}
-        <script src="https://cdn.tailwindcss.com"></script>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="{% static 'css/barkai.css' %}">
     {% endblock %}
 
+    {# Per-page stylesheets hook (e.g. chat.css loaded only by the chat page). #}
     {% block extra_css %}
-        <style>
-            /* When a Barkley reaction MP4 is missing, show the emoji fallback. */
-            .js-video-shell.is-missing video { display: none; }
-            .js-video-shell.is-missing .video-fallback { display: flex; }
-            /* Subtle custom scrollbar for the message thread. */
-            #message-thread::-webkit-scrollbar { width: 8px; }
-            #message-thread::-webkit-scrollbar-track { background: transparent; }
-            #message-thread::-webkit-scrollbar-thumb { background: rgb(99 102 241 / 0.4); border-radius: 999px; }
-        </style>
     {% endblock %}
 
     {% block corejs %}
+        {# Shared site behaviour as a cached static file. `defer` starts the    #}
+        {# download right away (head) without blocking HTML parsing, and runs   #}
+        {# the script only once the DOM is ready.                               #}
+        <script defer src="{% static 'js/navbar.js' %}"></script>
     {% endblock %}
 
+    {# Per-page deferred scripts hook (loaded early in <head>, executed after   #}
+    {# the DOM is parsed — never render-blocking).                              #}
     {% block extra_js %}
     {% endblock %}
 
     <title>
-        {% block title %}barkAI - Chat with Barkley{% endblock %}
+        {% block title %}BarkAI - Chat with BarklAI{% endblock %}
         {% block extra_title %}{% endblock %}
     </title>
 </head>
-{# Global shell: full-height, dark indigo gradient. Pages can append their own #}
-{# classes via body_class and attributes (e.g. data-*) via body_attrs.       #}
-<body class="h-screen overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 font-sans text-slate-100 antialiased{% block body_class %}{% endblock %}"{% block body_attrs %}{% endblock %}>
+{# Global shell: full-height dark flex column with an amber-tinted gradient. Pages #}
+{# can append classes via body_class and data-* attributes via body_attrs.        #}
+<body class="flex h-screen flex-col overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-amber-950/30 font-sans text-slate-100 antialiased{% block body_class %}{% endblock %}"{% block body_attrs %}{% endblock %}>
 
+    {# Global top navigation (brand, new chat, GitHub, interview CTA). #}
     {% block header %}
+        {% include 'partials/navbar.html' %}
     {% endblock %}
 
     {# Django messages rendered as Tailwind toast-style notifications. #}
     {% if messages %}
-        <div class="message-container pointer-events-none fixed inset-x-0 top-3 z-50 flex flex-col items-center gap-2 px-4">
+        <div class="pointer-events-none fixed inset-x-0 top-3 z-50 flex flex-col items-center gap-2 px-4">
             {% for message in messages %}
                 {% with message.level as level %}
                     {% if level == 40 %}
@@ -72,10 +76,15 @@
     {% block page_header %}
     {% endblock %}
 
-    {% block content %}
-    {% endblock %}
+    {# Main dynamic content area fills the space left by navbar and footer. #}
+    <main class="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        {% block content %}
+        {% endblock %}
+    </main>
 
+    {# Micro-disclaimer footer anchored below the chat composer. #}
     {% block footer %}
+        {% include 'partials/footer.html' %}
     {% endblock %}
 
     {% block postloadjs %}

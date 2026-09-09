@@ -1,4 +1,4 @@
-"""Barkley's reply service layer.
+"""BarklAI's reply service layer.
 
 This module is the seam where the future Groq (Qwen 2.5) + RAG pipeline will be
 plugged in. For now ``generate_reply()`` returns deterministic mock answers so
@@ -33,7 +33,7 @@ class BarkleyResponse:
 
 
 def generate_reply(user_message: str) -> BarkleyResponse:
-    """Produce Barkley's (mock) reply for a given user message."""
+    """Produce BarklAI's (mock) reply for a given user message."""
     text = (user_message or "").strip().lower()
 
     if any(hint in text for hint in _INTERVIEW_HINTS):
@@ -51,7 +51,7 @@ def generate_reply(user_message: str) -> BarkleyResponse:
     if text in _GREETINGS or any(text.startswith(prefix) for prefix in _GREETINGS):
         return BarkleyResponse(
             reply=(
-                "Woof! 👋 I am Barkley, Andrea's AI career companion. Ask me anything "
+                "Woof! 👋 I am BarklAI, Andrea's AI career companion. Ask me anything "
                 "about her open-source projects, Python/cloud architecture, or RAG "
                 "pipelines - or request an interview right here in the chat!"
             ),

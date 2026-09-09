@@ -33,7 +33,7 @@ class SendIn(Schema):
 
 
 class BarkleyOut(Schema):
-    """Barkley's reply plus the mascot animation state."""
+    """BarklAI's reply plus the mascot animation state."""
 
     session_id: UUID
     reply: str

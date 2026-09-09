@@ -1,0 +1,13 @@
+{
+  "name": "barkai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build tooling for the BarkAI frontend (compiled Tailwind CSS).",
+  "scripts": {
+    "css:build": "tailwindcss -i ./static/css/source.css -o ./static/css/barkai.css --minify",
+    "css:watch": "tailwindcss -i ./static/css/source.css -o ./static/css/barkai.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.17"
+  }
+}

@@ -15,7 +15,7 @@ from chat.api.router import router as chat_router
 api = NinjaAPI(
     title="barkAI API",
     version="1.0.0",
-    description="REST API powering the Barkley interactive career-agent chat.",
+    description="REST API powering the BarklAI interactive career-agent chat.",
     docs_url="/docs/",
     openapi_url="/openapi.json",
 )

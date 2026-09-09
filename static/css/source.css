@@ -1,0 +1,29 @@
+/* Tailwind input stylesheet — compiled by the CLI into static/css/barkai.css.
+ *
+ *   npm run css:build    # one-off, minified build
+ *   npm run css:watch    # rebuild while editing templates
+ *
+ * Keep ALL site-wide custom CSS below the Tailwind directives: everything in
+ * this file ends up in the single cached, minified barkai.css served by
+ * templates/base.html. Page-specific CSS belongs next to the page (see
+ * static/css/chat.css).
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* When a BarklAI reaction MP4 is missing, show the emoji fallback. */
+.js-video-shell.is-missing video { display: none; }
+.js-video-shell.is-missing .video-fallback { display: flex; }
+
+/* Subtle custom scrollbar for the message thread. */
+#message-thread::-webkit-scrollbar { width: 6px; }
+#message-thread::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+#message-thread::-webkit-scrollbar-thumb { background: rgba(245, 158, 11, 0.35); border-radius: 999px; }
+#message-thread::-webkit-scrollbar-thumb:hover { background: rgba(245, 158, 11, 0.6); }
+
+/* The `hidden` attribute must always win, even when Tailwind utilities
+   (e.g. `flex`) set an explicit display value on the same element. */
+[hidden] { display: none !important; }
+
+html { scroll-behavior: smooth; }
