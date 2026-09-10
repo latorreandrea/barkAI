@@ -10,8 +10,8 @@
 {% endblock %}
 
 {% block extra_css %}
-    {# Chat-page-only CSS (hero animations, typewriter fade, prompt pulse).    #}
-    {# Loaded only here so 403/404/500 pages never download it.                #}
+    {# Chat-page-only CSS (comic speech bubble, message hand-off transitions,  #}
+    {# onboarding choreography). Loaded here so error pages never download it. #}
     <link rel="stylesheet" href="{% static 'css/chat.css' %}">
 {% endblock %}
 
@@ -19,95 +19,145 @@
     {# Hidden CSRF cookie/input used by the fetch() JSON POSTs below. #}
     {% csrf_token %}
 
-    <div class="mx-auto flex min-h-0 w-full flex-1 flex-col md:flex-row">
+    {# ---------------------------------------------------------------- #}
+    {# MASCOT-CENTRIC LAYOUT                                            #}
+    {#  Top    -> scrollable chat history (fades at the upper edge)     #}
+    {#  Middle -> BarklAI video + comic speech bubble (live utterance)  #}
+    {#  Bottom -> sticky comic-style composer                           #}
+    {# ---------------------------------------------------------------- #}
+    <div id="chat-layout" class="relative flex h-full min-h-0 w-full max-w-3xl flex-col mx-auto">
 
-        <!-- Desktop (md+): left mascot sidebar (1/3 width). -->
-        <aside class="hidden shrink-0 flex-col items-center justify-center gap-6 overflow-y-auto bg-slate-900/40 px-6 py-8 md:flex md:w-1/3 md:border-r md:border-white/10">
-            <div class="js-video-shell relative aspect-square w-64 shrink-0 overflow-hidden rounded-2xl border border-slate-800 bg-slate-950 shadow-xl ring-4 ring-amber-500/10">
-                <video class="js-mascot-video h-full w-full object-cover" autoplay muted loop playsinline preload="auto"></video>
-                <div class="video-fallback hidden h-full w-full items-center justify-center text-8xl">🐶</div>
+        <!-- ==================== TOP: CHAT HISTORY ==================== -->
+        <section id="history-pane" aria-label="Chat history"
+                 class="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
+
+            {# Soft top gradient suggests the conversation keeps flowing upwards #}
+            {# while the user scrolls back through the whole chat history.      #}
+            <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 z-10 h-14
+                 bg-gradient-to-b from-slate-950 via-slate-950/85 to-transparent"></div>
+
+            {# Scrollable message list. Newest rows sit at the bottom, right    #}
+            {# above the speech bubble, so the hand-off animation reads as one  #}
+            {# continuous vertical flow. Inner wrapper is min-h-full + flex-end #}
+            {# so a short thread hugs the mascot instead of floating up top.    #}
+            <div id="message-thread" class="flex-1 overflow-y-auto px-4 md:px-8">
+                <div id="message-list" aria-live="polite"
+                     class="flex min-h-full flex-col justify-end space-y-4 pb-4 pt-14"></div>
             </div>
-
-            <div class="w-64 text-center">
-                <div class="inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-xs font-medium text-amber-300">
-                    <span class="h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-400"></span>
-                    <span data-mascot-status>BarklAI is ready — ask me anything!</span>
-                </div>
-                <p class="mt-4 text-xs leading-relaxed text-slate-400">
-                    BarklAI is Andrea's AI career companion. Ask about her Python/Django
-                    experience, open-source projects or RAG pipelines — or request an interview.
-                </p>
-            </div>
-
-            <div class="w-64 space-y-2">
-                <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Quick questions</p>
-                <button type="button" data-suggestion="Tell me about Andrea's background and career."
-                        class="block w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left text-xs text-slate-300 transition hover:border-amber-400/40 hover:bg-amber-400/10 hover:text-amber-200">
-                    💼 Andrea's background
-                </button>
-                <button type="button" data-suggestion="Which Python and Django projects has Andrea built?"
-                        class="block w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left text-xs text-slate-300 transition hover:border-amber-400/40 hover:bg-amber-400/10 hover:text-amber-200">
-                    🐍 Python &amp; Django projects
-                </button>
-                <button type="button" data-suggestion="Explain how Andrea builds RAG pipelines and AI agents."
-                        class="block w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left text-xs text-slate-300 transition hover:border-amber-400/40 hover:bg-amber-400/10 hover:text-amber-200">
-                    🧠 RAG &amp; AI agents
-                </button>
-                <button type="button" data-suggestion="I would like to schedule an interview with Andrea."
-                        class="block w-full rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-left text-xs font-semibold text-amber-300 transition hover:border-amber-400/60 hover:bg-amber-400/20">
-                    🗓 Request an interview
-                </button>
-            </div>
-        </aside>
-
-        <!-- Chat panel: right 2/3 on desktop; full width on mobile below the global navbar. -->
-        <section id="chat-section" class="flex min-h-0 w-full flex-1 flex-col">
-
-            <!-- Mobile-only compact sticky header: BarklAI circular avatar + status bubble. -->
-            <header class="z-20 flex shrink-0 items-center gap-3 border-b border-white/10 bg-slate-900/95 px-3 py-2.5 backdrop-blur md:hidden">
-                <div class="js-video-shell relative h-20 w-20 shrink-0 overflow-hidden rounded-full border-2 border-amber-500/50 bg-slate-950">
-                    <video class="js-mascot-video h-full w-full rounded-full object-cover" autoplay muted loop playsinline preload="auto"></video>
-                    <div class="video-fallback hidden h-full w-full items-center justify-center text-4xl">🐶</div>
-                </div>
-                <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2">
-                        <p class="text-base font-bold">BarklAI</p>
-                        <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
-                            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400"></span>Online
-                        </span>
-                    </div>
-                    <p class="truncate text-xs leading-snug text-slate-300" data-mascot-status>BarklAI is ready — ask me anything!</p>
-                </div>
-            </header>
-
-            <!-- Scrollable message history. -->
-            <section id="message-thread" aria-live="polite"
-                     class="flex-1 space-y-4 overflow-y-auto px-4 py-5 md:px-8"></section>
-
-            <!-- Bottom composer anchored above the micro-disclaimer footer. -->
-            <footer class="shrink-0 border-t border-white/10 bg-slate-900/80 px-4 py-3 backdrop-blur md:px-6">
-                <form id="chat-form" class="flex items-center gap-2" autocomplete="off">
-                    <label for="chat-input" class="sr-only">Message BarklAI</label>
-                    <input id="chat-input" name="message" type="text" required maxlength="2000"
-                           placeholder="Ask BarklAI about Andrea's experience…"
-                           class="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-800/80 px-4 py-3 text-sm text-slate-100 placeholder-slate-500 outline-none transition focus:border-amber-400/60 focus:ring-2 focus:ring-amber-400/30 disabled:opacity-50" />
-                    <button id="chat-send" type="submit"
-                            class="shrink-0 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 px-5 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/25 transition hover:from-amber-400 hover:to-orange-400 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50">
-                        Send
-                    </button>
-                </form>
-                <p class="mt-2 text-center text-[11px] text-slate-500">
-                    <span class="hidden sm:inline">Session: <span id="session-chip" class="font-mono text-amber-400/80"></span></span>
-                </p>
-            </footer>
         </section>
+
+        <!-- ============ MIDDLE: BARKLAI STAGE + LIVE SPEECH BUBBLE ============ -->
+        <section id="mascot-stage" aria-label="BarklAI — live speech bubble"
+                 class="relative z-20 flex shrink-0 flex-col items-center border-t-2 border-dashed
+                        border-white/10 bg-slate-950/30 px-4 pb-3 pt-5 md:pt-6">
+
+            {# Spotlight glow behind the mascot. Declared as the first child so  #}
+            {# it paints above the panel background but under the bubble/video.  #}
+            <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 bottom-0 h-56
+                 bg-[radial-gradient(50%_60%_at_50%_100%,rgba(251,191,36,0.16),transparent_70%)]"></div>
+
+            {# Comic speech bubble. Shows EXCLUSIVELY BarklAI's current live     #}
+            {# message/reply or his progress state (e.g. "BarklAI is searching") #}
+            {# with a hard "pop-art" shadow, an ink outline and a tail pointing  #}
+            {# straight down at the dog. Long replies scroll inside (max-h-52).  #}
+            <div id="speech-bubble" class="relative w-full max-w-md">
+                <div id="speech-bubble-scroll"
+                     class="bubble-scroll max-h-52 overflow-y-auto rounded-2xl rounded-br-md
+                            border-[3px] border-slate-900 bg-white px-5 py-3.5
+                            shadow-[5px_5px_0_0_#0f172a]">
+                    <p id="speech-bubble-text" class="bubble-text text-[15px] font-semibold leading-snug text-slate-900"></p>
+                </div>
+                <svg class="bubble-tail absolute -bottom-[15px] left-1/2 h-[18px] w-[34px]
+                           -translate-x-1/2" viewBox="0 0 34 18" fill="none" aria-hidden="true">
+                    <path d="M3 0H31L17 16Z" fill="#ffffff" stroke="#0f172a" stroke-width="3"
+                          stroke-linejoin="round" />
+                </svg>
+            </div>
+
+            {# BarklAI circular video portrait (state-based MP4). The fallback   #}
+            {# emoji shows whenever a reaction clip is missing on disk.         #}
+            <div class="js-video-shell relative mt-7 flex h-36 w-36 items-center justify-center
+                        overflow-hidden rounded-full border-4 border-slate-900 bg-slate-950
+                        shadow-[0_0_0_5px_rgba(255,255,255,0.92),6px_6px_0_0_#0f172a]
+                        sm:h-44 sm:w-44 md:h-48 md:w-48">
+                <video class="js-mascot-video h-full w-full object-cover"
+                       autoplay muted loop playsinline preload="auto"></video>
+                <div class="video-fallback hidden h-full w-full items-center justify-center text-5xl">🐶</div>
+            </div>
+
+            {# Nameplate + live status pill (small, under the dog). #}
+            <div class="mt-4 flex flex-col items-center gap-1.5">
+                <p class="rounded-full border-2 border-slate-900 bg-amber-400 px-3 py-0.5
+                          text-[10px] font-black uppercase tracking-[0.18em] text-slate-900
+                          shadow-[2px_2px_0_0_#0f172a]">🐾 BarklAI</p>
+                <p data-mascot-status class="text-[11px] font-medium text-slate-400"></p>
+            </div>
+        </section>
+
+        <!-- ==================== BOTTOM: STICKY COMIC COMPOSER ==================== -->
+        <footer class="sticky bottom-0 z-30 shrink-0 border-t-2 border-dashed border-white/10
+                       bg-slate-950/95 px-3 pb-2 pt-3 backdrop-blur md:px-4">
+
+            {# Gentle hint shown after BarklAI's greeting (hidden by default). #}
+            <p id="chat-prompt" hidden class="mb-2 text-center text-[11px] font-medium
+               text-amber-300/90">👇 Ask BarklAI your first question below!</p>
+
+            {# Quick-suggestion rail (hidden once a real user turn is sent). #}
+            <div id="suggestion-rail" class="mx-auto mb-2 flex w-full max-w-xl items-center gap-2
+                 overflow-x-auto px-1 no-scrollbar">
+                <button type="button" data-suggestion="Tell me about Andrea's background and career."
+                        class="suggestion-chip">💼 Background</button>
+                <button type="button" data-suggestion="Which Python and Django projects has Andrea built?"
+                        class="suggestion-chip">🐍 Python &amp; Django projects</button>
+                <button type="button" data-suggestion="Explain how Andrea builds RAG pipelines and AI agents."
+                        class="suggestion-chip">🧠 RAG &amp; AI agents</button>
+                <button type="button" data-suggestion="I would like to schedule an interview with Andrea."
+                        class="suggestion-chip is-primary">🗓 Request an interview</button>
+            </div>
+
+            <form id="chat-form" class="mx-auto flex w-full max-w-xl items-center gap-2"
+                  autocomplete="off">
+                <label for="chat-input" class="sr-only">Message BarklAI</label>
+                <input id="chat-input" name="message" type="text" required maxlength="2000"
+                       placeholder="Ask BarklAI anything about Andrea's career…"
+                       class="min-w-0 flex-1 rounded-2xl border-2 border-white/15 bg-slate-800/90
+                              px-4 py-3 text-sm text-slate-100 placeholder-slate-500 outline-none
+                              transition focus:border-amber-400/70 focus:ring-2 focus:ring-amber-400/40
+                              disabled:opacity-50" />
+                <button id="chat-send" type="submit"
+                        class="shrink-0 rounded-2xl border-[3px] border-slate-900
+                               bg-gradient-to-b from-amber-300 to-orange-500 px-5 py-3 text-sm
+                               font-black uppercase tracking-wider text-slate-950
+                               shadow-[4px_4px_0_0_#0f172a] transition
+                               hover:from-amber-200 hover:to-orange-400
+                               hover:shadow-[6px_6px_0_0_#0f172a]
+                               active:translate-x-[2px] active:translate-y-[2px]
+                               active:shadow-[2px_2px_0_0_#0f172a]
+                               disabled:cursor-not-allowed disabled:opacity-40
+                               disabled:active:translate-x-0 disabled:active:translate-y-0">
+                    Send 🐾
+                </button>
+            </form>
+
+            <p class="mx-auto mt-1.5 max-w-xl text-center text-[10px] text-slate-500">
+                Session: <span id="session-chip" class="font-mono text-amber-400/80"></span> ·
+                BarklAI answers from Andrea's career docs &amp; RAG-indexed projects.
+            </p>
+        </footer>
     </div>
 
-    <!-- First-visit onboarding: fullscreen hero overlay. Hidden by default and
-         revealed by JS only when localStorage["barkai_visited"] is missing. -->
+    {# ---------------------------------------------------------------- #}
+    {# FIRST-VISIT ONBOARDING: fullscreen hero overlay. Hidden by default #}
+    {# and revealed by JS only when localStorage["barkai_visited"] is    #}
+    {# missing. On dismiss it slides up to reveal the mascot stage where #}
+    {# BarklAI sniffs the screen and greets the recruiter in the bubble. #}
+    {# ---------------------------------------------------------------- #}
     <section id="hero-onboarding" hidden
-             class="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-slate-950 px-6 text-center transition-all duration-700 ease-out">
-        <div class="hero-reveal mb-10 flex h-36 w-36 items-center justify-center rounded-full bg-gradient-to-br from-amber-500/20 via-orange-500/10 to-transparent text-8xl ring-1 ring-amber-500/20 md:h-44 md:w-44 md:text-9xl">
+             class="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-slate-950
+                    px-6 text-center transition-all duration-700 ease-out">
+        <div class="hero-reveal mb-10 flex h-36 w-36 items-center justify-center rounded-full
+                    bg-gradient-to-br from-amber-500/20 via-orange-500/10 to-transparent text-8xl
+                    ring-1 ring-amber-500/20 md:h-44 md:w-44 md:text-9xl">
             <span aria-hidden="true">🐶</span>
         </div>
         <p class="hero-reveal delay-1 text-[11px] font-semibold uppercase tracking-[0.3em] text-amber-400/80">An interactive career agent</p>
@@ -119,21 +169,26 @@
             He has been waiting to sniff out your questions about Andrea's software development career.
         </p>
         <button type="button" id="hero-scroll-hint"
-                class="hero-reveal delay-3 mt-14 flex flex-col items-center gap-3 rounded-full border border-white/10 bg-white/5 px-6 py-3 text-[11px] font-semibold uppercase tracking-widest text-slate-300 transition hover:border-amber-400/40 hover:text-amber-300">
+                class="hero-reveal delay-3 mt-14 flex flex-col items-center gap-3 rounded-full
+                       border border-white/10 bg-white/5 px-6 py-3 text-[11px] font-semibold
+                       uppercase tracking-widest text-slate-300 transition
+                       hover:border-amber-400/40 hover:text-amber-300">
             <span>Scroll down to meet BarklAI</span>
-            <svg class="h-4 w-4 animate-bounce text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+            <svg class="h-4 w-4 animate-bounce text-amber-400" fill="none" stroke="currentColor"
+                 viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
             </svg>
         </button>
     </section>
 {% endblock %}
 
-
 {% block extra_js %}
-    {# Chat behaviour: mascot state machine, history restore and send. Loaded  #}
-    {# early in <head> and deferred, so the browser can cache it and never     #}
-    {# blocks HTML parsing. The Django-provided context reaches it through the #}
-    {# data-session-id / data-media-url attributes on <body>.                  #}
+    {# Chat behaviour: mascot state machine, live speech-bubble ↔ history      #}
+    {# hand-off, onboarding and send. Loaded early in <head> and deferred, so   #}
+    {# the browser can cache it and never blocks HTML parsing. The Django       #}
+    {# context reaches it through the data-session-id / data-media-url body     #}
+    {# attributes.                                                              #}
     <script defer src="{% static 'js/chat.js' %}"></script>
 {% endblock %}
 
