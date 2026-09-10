@@ -27,6 +27,18 @@
     {# ---------------------------------------------------------------- #}
     <div id="chat-layout" class="relative flex h-full min-h-0 w-full max-w-3xl flex-col mx-auto">
 
+        <!-- Toggle: expand the history to full screen (or back to the live chat). -->
+        <button type="button" id="history-toggle"
+                class="absolute right-3 top-3 z-50 flex items-center gap-1.5 rounded-full
+                       border-2 border-slate-900 bg-white px-3 py-1.5 text-[11px] font-black
+                       uppercase tracking-wider text-slate-900 shadow-[3px_3px_0_0_#0f172a]
+                       transition hover:bg-amber-100"
+                aria-expanded="false" aria-controls="history-pane"
+                aria-label="Toggle chat history">
+            <span id="history-toggle-icon" aria-hidden="true">⤢</span>
+            <span id="history-toggle-label">History</span>
+        </button>
+
         <!-- ==================== TOP: CHAT HISTORY ==================== -->
         <section id="history-pane" aria-label="Chat history"
                  class="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -49,7 +61,7 @@
         <!-- ============ MIDDLE: BARKLAI STAGE + LIVE SPEECH BUBBLE ============ -->
         <section id="mascot-stage" aria-label="BarklAI — live speech bubble"
                  class="relative z-20 flex shrink-0 flex-col items-center border-t-2 border-dashed
-                        border-slate-200 bg-slate-50 px-4 pb-3 pt-5 md:pt-6">
+                        border-slate-200 bg-white px-4 pb-3 pt-5 md:pt-6">
 
             {# Spotlight glow behind the mascot. Declared as the first child so  #}
             {# it paints above the panel background but under the bubble/video.  #}
@@ -59,10 +71,10 @@
             {# Comic speech bubble. Shows EXCLUSIVELY BarklAI's current live     #}
             {# message/reply or his progress state (e.g. "BarklAI is searching") #}
             {# with a hard "pop-art" shadow, an ink outline and a tail pointing  #}
-            {# straight down at the dog. Long replies scroll inside (max-h-52).  #}
+            {# straight down at the dog. Long replies scroll inside (max-h-32).  #}
             <div id="speech-bubble" class="relative w-full max-w-md">
                 <div id="speech-bubble-scroll"
-                     class="bubble-scroll max-h-52 overflow-y-auto rounded-2xl rounded-br-md
+                     class="bubble-scroll max-h-32 overflow-y-auto rounded-2xl rounded-br-md
                             border-[3px] border-slate-900 bg-white px-5 py-3.5
                             shadow-[5px_5px_0_0_#0f172a]">
                     <p id="speech-bubble-text" class="bubble-text text-[15px] font-semibold leading-snug text-slate-900"></p>
@@ -74,33 +86,24 @@
                 </svg>
             </div>
 
-            {# BarklAI circular video portrait (state-based MP4) with the comic   #}
-            {# "Woof!" onomatopoeia that pops near the end of the sniffing clip.  #}
-            {# The fallback emoji shows whenever a reaction clip is missing.      #}
-            <div class="relative mt-7">
-                <div class="js-video-shell relative flex h-36 w-36 items-center justify-center
-                            overflow-hidden rounded-full border-4 border-slate-900 bg-white
-                            shadow-[0_0_0_5px_rgba(251,191,36,0.25),6px_6px_0_0_#0f172a]
-                            sm:h-44 sm:w-44 md:h-48 md:w-48">
-                    <video class="js-mascot-video h-full w-full object-cover"
+            {# BarklAI video, shown at the MP4's own aspect ratio (the real clips  #}
+            {# are portrait ~848x1280) with no border or circle, so it blends into #}
+            {# the white page. The "Woof!" onomatopoeia pops near the end of the   #}
+            {# sniffing clip; the fallback emoji shows if a reaction clip is gone. #}
+            <div class="relative mt-6 flex w-full items-center justify-center">
+                <div class="js-video-shell relative flex items-center justify-center">
+                    <video class="js-mascot-video block h-auto max-h-[38vh] w-auto max-w-full object-contain"
                            autoplay muted loop playsinline preload="auto"></video>
-                    <div class="video-fallback hidden h-full w-full items-center justify-center text-5xl">🐶</div>
+                    <div class="video-fallback hidden h-40 w-40 items-center justify-center text-6xl">🐶</div>
+                    <div id="bark-onomatopoeia" class="comic-onomatopoeia comic-bark"
+                         aria-hidden="true">Woof!</div>
                 </div>
-                <div id="bark-onomatopoeia" class="comic-onomatopoeia comic-bark"
-                     aria-hidden="true">Woof!</div>
-            </div>
-
-            {# Nameplate + live status pill (small, under the dog). #}
-            <div class="mt-4 flex flex-col items-center gap-1.5">
-                <p class="rounded-full border-2 border-slate-900 bg-amber-400 px-3 py-0.5
-                          text-[10px] font-black uppercase tracking-[0.18em] text-slate-900
-                          shadow-[2px_2px_0_0_#0f172a]">🐾 BarklAI</p>
-                <p data-mascot-status class="text-[11px] font-medium text-slate-500"></p>
             </div>
         </section>
 
         <!-- ==================== BOTTOM: STICKY COMIC COMPOSER ==================== -->
-        <footer class="sticky bottom-0 z-30 shrink-0 border-t-2 border-dashed border-slate-200
+        <footer id="chat-composer"
+                class="sticky bottom-0 z-30 shrink-0 border-t-2 border-dashed border-slate-200
                        bg-white/95 px-3 pb-2 pt-3 backdrop-blur md:px-4">
 
             {# Gentle hint shown after BarklAI's greeting (hidden by default). #}
@@ -143,11 +146,6 @@
                     Send 🐾
                 </button>
             </form>
-
-            <p class="mx-auto mt-1.5 max-w-xl text-center text-[10px] text-slate-500">
-                Session: <span id="session-chip" class="font-mono text-amber-600"></span> ·
-                BarklAI answers from Andrea's career docs &amp; RAG-indexed projects.
-            </p>
         </footer>
     </div>
 
@@ -165,16 +163,11 @@
              class="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-white
                     px-6 text-center">
 
-        {# Step 1 — opening line + intro copy (fades in, holds, fades out). #}
+        {# Step 1 — opening line (fades in, holds, fades out). #}
         <div class="hero-step" data-hero-step="1">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.3em] text-amber-600">An interactive career agent</p>
-            <h2 class="mt-4 max-w-3xl text-3xl font-extrabold leading-tight text-slate-900 md:text-5xl">
+            <h2 class="max-w-3xl text-3xl font-extrabold leading-tight text-slate-900 md:text-5xl">
                 Come closer so we can get to know each other...
             </h2>
-            <p class="mt-5 max-w-xl text-sm leading-relaxed text-slate-500 md:text-base">
-                BarklAI is a curious Cocker Spaniel with a nose for great engineers.
-                He has been waiting to sniff out your questions about Andrea's software development career.
-            </p>
         </div>
 
         {# Step 2 — invite the visitor to scroll down (waits for the gesture). #}

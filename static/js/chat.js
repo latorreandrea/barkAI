@@ -47,6 +47,12 @@
     var heroHintEl = document.getElementById("hero-scroll-hint");
     var heroSteps = Array.prototype.slice.call(document.querySelectorAll("[data-hero-step]"));
     var barkOnomatopoeiaEl = document.getElementById("bark-onomatopoeia");
+    var chatLayoutEl = document.getElementById("chat-layout");
+    var mascotStageEl = document.getElementById("mascot-stage");
+    var composerEl = document.getElementById("chat-composer");
+    var historyToggleEl = document.getElementById("history-toggle");
+    var historyToggleLabelEl = document.getElementById("history-toggle-label");
+    var historyToggleIconEl = document.getElementById("history-toggle-icon");
     var bubbleTextEl = document.getElementById("speech-bubble-text");
     var bubbleScrollEl = document.getElementById("speech-bubble-scroll");
     var promptEl = document.getElementById("chat-prompt");
@@ -680,6 +686,59 @@
             });
         });
     }
+
+    // ================================================================ //
+    // 12) EXPANDABLE HISTORY + WHEEL FORWARDING                        //
+    // ================================================================ //
+    var historyExpanded = false;
+
+    function setHistoryExpanded(expanded) {
+        historyExpanded = expanded;
+        if (chatLayoutEl) {
+            chatLayoutEl.classList.toggle("is-history-expanded", expanded);
+        }
+        if (historyToggleEl) {
+            historyToggleEl.setAttribute("aria-expanded", expanded ? "true" : "false");
+        }
+        if (historyToggleLabelEl) {
+            historyToggleLabelEl.textContent = expanded ? "Live chat" : "History";
+        }
+        if (historyToggleIconEl) {
+            historyToggleIconEl.textContent = expanded ? "✕" : "⤢";
+        }
+    }
+
+    if (historyToggleEl) {
+        historyToggleEl.addEventListener("click", function () {
+            setHistoryExpanded(!historyExpanded);
+        });
+    }
+
+    document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && historyExpanded) {
+            setHistoryExpanded(false);
+        }
+    });
+
+    // Forward the mouse wheel over the mascot / composer to the history thread,
+    // so the visitor does not have to aim precisely at the scrollable list.
+    function forwardWheelToHistory(event) {
+        if (!threadEl || threadEl.scrollHeight <= threadEl.clientHeight) {
+            return; // Nothing to scroll: leave the event alone.
+        }
+        // If the pointer is over a scrollable speech bubble, let it scroll itself.
+        if (bubbleScrollEl && bubbleScrollEl.contains(event.target) &&
+            bubbleScrollEl.scrollHeight > bubbleScrollEl.clientHeight) {
+            return;
+        }
+        threadEl.scrollTop += event.deltaY;
+    }
+
+    [mascotStageEl, composerEl].forEach(function (el) {
+        if (el) {
+            el.addEventListener("wheel", forwardWheelToHistory, { passive: true });
+        }
+    });
 
     formEl.addEventListener("submit", function (event) {
         event.preventDefault();

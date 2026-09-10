@@ -68,8 +68,8 @@
 /* The "Woof!" pops next to the mascot near the end of the sniffing clip. */
 #bark-onomatopoeia {
     position: absolute;
-    top: -.5rem;
-    right: -18%;
+    top: -.35rem;
+    right: -12%;
     opacity: 0;
     pointer-events: none;
     z-index: 40;
@@ -80,6 +80,28 @@
     18%  { opacity: 1; transform: rotate(-8deg) scale(1.15); }
     55%  { opacity: 1; transform: rotate(-8deg) scale(1); }
     100% { opacity: 0; transform: rotate(-8deg) scale(1.05) translateY(-10px); }
+}
+
+/* ------------------------------------------------------------------ */
+/* Expandable history: the pane overlays the whole chat column so the  */
+/* visitor can browse the conversation with a full-height scroll area. */
+/* ------------------------------------------------------------------ */
+#chat-layout.is-history-expanded #history-pane {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    background: #ffffff;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, .06);
+    animation: historyExpand .3s ease both;
+}
+#chat-layout.is-history-expanded #mascot-stage,
+#chat-layout.is-history-expanded #chat-composer {
+    opacity: 0;
+    pointer-events: none;
+}
+@keyframes historyExpand {
+    from { opacity: .35; }
+    to   { opacity: 1; }
 }
 
 /* ------------------------------------------------------------------ */
