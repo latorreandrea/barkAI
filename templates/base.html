@@ -24,7 +24,7 @@
     {% block corecss %}
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
         <link rel="stylesheet" href="{% static 'css/barkai.css' %}">
     {% endblock %}
 
@@ -49,9 +49,10 @@
         {% block extra_title %}{% endblock %}
     </title>
 </head>
-{# Global shell: full-height dark flex column with an amber-tinted gradient. Pages #}
-{# can append classes via body_class and data-* attributes via body_attrs.        #}
-<body class="flex h-screen flex-col overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-amber-950/30 font-sans text-slate-100 antialiased{% block body_class %}{% endblock %}"{% block body_attrs %}{% endblock %}>
+{# Global shell: full-height light flex column on a plain white canvas, so it #}
+{# blends with the white background of BarklAI's mascot MP4 clips. Pages can    #}
+{# append classes via body_class and data-* attributes via body_attrs.          #}
+<body class="flex h-screen flex-col overflow-hidden bg-white font-sans text-slate-800 antialiased{% block body_class %}{% endblock %}"{% block body_attrs %}{% endblock %}>
 
     {# Global top navigation (brand, new chat, GitHub, interview CTA). #}
     {% block header %}

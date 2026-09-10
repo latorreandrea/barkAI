@@ -52,7 +52,7 @@ def generate_reply(user_message: str) -> BarkleyResponse:
         return BarkleyResponse(
             reply=(
                 "Woof! 👋 I am BarklAI, Andrea's AI career companion. Ask me anything "
-                "about her open-source projects, Python/cloud architecture, or RAG "
+                "about his open-source projects, Python/cloud architecture, or RAG "
                 "pipelines - or request an interview right here in the chat!"
             ),
             barkley_state="speaking",
@@ -65,7 +65,7 @@ def generate_reply(user_message: str) -> BarkleyResponse:
             "RAG-powered agents and cloud architectures. I searched the indexed "
             "repositories and career docs to fetch the most accurate answer - this "
             "mock reply will soon be backed by the Groq (Qwen 2.5) pipeline. Ask me "
-            "about her tech stack, past projects, or to schedule an interview!"
+            "about his tech stack, past projects, or to schedule an interview!"
         ),
         barkley_state="speaking",
         interview_requested=False,

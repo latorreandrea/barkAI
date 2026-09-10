@@ -7,29 +7,79 @@
  */
 
 /* ------------------------------------------------------------------ */
-/* Onboarding overlay: smooth slide-out towards the chat view.         */
+/* Onboarding overlay: white fullscreen stage that plays the welcome   */
+/* lines in sequence and then fades away towards the chat view.        */
 /* ------------------------------------------------------------------ */
 #hero-onboarding {
-    transition: transform .9s cubic-bezier(.22, 1, .36, 1), opacity .7s ease;
-    will-change: transform, opacity;
+    transition: opacity .7s ease;
+    will-change: opacity;
 }
-#hero-onboarding.is-leaving { transform: translateY(-100%); opacity: 0; }
-#hero-onboarding.is-leaving .hero-reveal { animation: heroFadeOut .5s ease forwards; }
+#hero-onboarding.is-leaving { opacity: 0; }
 
-/* Staggered reveal: hero texts fade in step by step. */
-.hero-reveal { opacity: 0; }
-#hero-onboarding.is-ready .hero-reveal { animation: heroFadeUp .8s cubic-bezier(.22, 1, .36, 1) forwards; }
-#hero-onboarding.is-ready .delay-1 { animation-delay: .1s; }
-#hero-onboarding.is-ready .delay-2 { animation-delay: .55s; }
-#hero-onboarding.is-ready .delay-3 { animation-delay: 1.2s; }
-
-@keyframes heroFadeUp {
+/* Each welcome line is a full-size stacked layer that fades in and out. */
+.hero-step {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    opacity: 0;
+    pointer-events: none;
+}
+.hero-step.is-active {
+    opacity: 1;
+    pointer-events: auto;
+    animation: heroStepIn .8s cubic-bezier(.22, 1, .36, 1) both;
+}
+.hero-step.is-leaving {
+    pointer-events: none;
+    animation: heroStepOut .6s ease forwards;
+}
+@keyframes heroStepIn {
     from { opacity: 0; transform: translateY(18px) scale(.98); }
     to   { opacity: 1; transform: none; }
 }
-@keyframes heroFadeOut {
+@keyframes heroStepOut {
     from { opacity: 1; transform: none; }
-    to   { opacity: 0; transform: translateY(-12px); }
+    to   { opacity: 0; transform: translateY(-12px) scale(.98); }
+}
+
+/* ------------------------------------------------------------------ */
+/* Comic onomatopoeia ("Sniff sniff" / "Woof!") in a pop-art style.    */
+/* ------------------------------------------------------------------ */
+.comic-onomatopoeia {
+    font-family: "Bangers", "Comic Sans MS", cursive;
+    font-weight: 400;
+    line-height: .9;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: #fbbf24;
+    -webkit-text-stroke: 3px #0f172a;
+    paint-order: stroke fill;
+    text-shadow: 5px 5px 0 #0f172a;
+    transform: rotate(-6deg);
+    user-select: none;
+}
+.comic-sniff { font-size: clamp(3rem, 13vw, 7.5rem); }
+.comic-bark  { font-size: clamp(2.25rem, 9vw, 5rem); }
+
+/* The "Woof!" pops next to the mascot near the end of the sniffing clip. */
+#bark-onomatopoeia {
+    position: absolute;
+    top: -.5rem;
+    right: -18%;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 40;
+}
+#bark-onomatopoeia.is-visible { animation: barkPop 1.1s ease forwards; }
+@keyframes barkPop {
+    0%   { opacity: 0; transform: rotate(-8deg) scale(.35); }
+    18%  { opacity: 1; transform: rotate(-8deg) scale(1.15); }
+    55%  { opacity: 1; transform: rotate(-8deg) scale(1); }
+    100% { opacity: 0; transform: rotate(-8deg) scale(1.05) translateY(-10px); }
 }
 
 /* ------------------------------------------------------------------ */
@@ -107,28 +157,28 @@
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
 
-/* Comic quick-prompt chips. */
+/* Comic quick-prompt chips (light theme). */
 .suggestion-chip {
     flex: 0 0 auto;
     white-space: nowrap;
     border-radius: 9999px;
-    border: 2px solid rgba(148, 163, 184, .25);
-    background: rgba(15, 23, 42, .85);
+    border: 2px solid rgba(148, 163, 184, .35);
+    background: rgba(255, 255, 255, .9);
     padding: .3rem .85rem;
     font-size: 11px;
     font-weight: 600;
-    color: #cbd5e1;
+    color: #475569;
     transition: border-color .15s ease, color .15s ease, transform .15s ease, background-color .15s ease;
 }
 .suggestion-chip:hover {
-    border-color: rgba(251, 191, 36, .7);
-    color: #fcd34d;
+    border-color: rgba(217, 119, 6, .7);
+    color: #b45309;
     transform: translateY(-1px);
 }
 .suggestion-chip.is-primary {
-    border-color: rgba(251, 191, 36, .6);
-    background: rgba(251, 191, 36, .12);
-    color: #fcd34d;
+    border-color: rgba(217, 119, 6, .55);
+    background: rgba(251, 191, 36, .18);
+    color: #b45309;
 }
 
 /* ------------------------------------------------------------------ */

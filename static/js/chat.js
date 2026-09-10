@@ -45,6 +45,8 @@
     var sessionChip = document.getElementById("session-chip");
     var heroEl = document.getElementById("hero-onboarding");
     var heroHintEl = document.getElementById("hero-scroll-hint");
+    var heroSteps = Array.prototype.slice.call(document.querySelectorAll("[data-hero-step]"));
+    var barkOnomatopoeiaEl = document.getElementById("bark-onomatopoeia");
     var bubbleTextEl = document.getElementById("speech-bubble-text");
     var bubbleScrollEl = document.getElementById("speech-bubble-scroll");
     var promptEl = document.getElementById("chat-prompt");
@@ -200,14 +202,15 @@
         var bubble = document.createElement("div");
         bubble.className = "max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed " +
             (isUser ? "rounded-br-sm bg-amber-500 text-slate-950"
-                    : "rounded-bl-sm bg-white/10 text-slate-100 ring-1 ring-white/10");
+                    : "rounded-bl-sm border-2 border-slate-900 bg-white text-slate-900 " +
+                      "shadow-[3px_3px_0_0_#0f172a]");
         if (animateIn) {
             bubble.classList.add("history-row-in");
         }
 
         var meta = document.createElement("div");
         meta.className = "mb-1 text-[10px] font-semibold uppercase tracking-wide " +
-            (isUser ? "text-amber-900/80" : "text-amber-300/80");
+            (isUser ? "text-amber-900/80" : "text-amber-700");
         meta.textContent = isUser ? "You" : "BarklAI 🐾";
 
         var text = document.createElement("p");
@@ -286,27 +289,74 @@
     }
 
     // ================================================================ //
-    // 8) FIRST-VISIT ONBOARDING: hero -> sniffing -> spoken hello      //
+    // 8) FIRST-VISIT ONBOARDING: hero lines -> sniffing -> woof ->      //
+    //    two spoken intro messages (scripted, never persisted).        //
     // ================================================================ //
-    var HERO_GREETING = "Woof! Hello there! I'm BarklAI. I just caught your scent! " +
-        "What would you like to know about Andrea's software development career and projects?";
+    var ONBOARDING_MESSAGE_1 = "Woof! Wait... [sniff, sniff]... I smell clean code and " +
+        "new opportunities! Hi! I'm BarkAI. What brings you here? Are you looking for " +
+        "the right dev for your team?";
+    var ONBOARDING_MESSAGE_2 = "Perfect! Then you're in the right place. If you want to " +
+        "learn more about Andrea's work, his skills, or chat about his projects (or even " +
+        "figure out how he can help you solve a specific technical challenge), just tell " +
+        "me: I'm all ears!";
     var REVISITOR_GREETING = "Woof! 👋 I'm BarklAI, Andrea's AI career companion. " +
-        "Ask me about her open-source projects, Python/Django experience, or RAG pipelines — " +
+        "Ask me about his open-source projects, Python/Django experience, or RAG pipelines — " +
         "or request an interview right here!";
-    var heroDismissed = false;
 
-    // Trigger the staggered fade-up of the hero headline, subtitle and hint.
-    function revealHero() {
-        // requestAnimationFrame lets the browser paint the overlay first, so the
-        // reveal animations always run (elements start with opacity: 0).
-        window.requestAnimationFrame(function () {
-            heroEl.classList.add("is-ready");
+    // Message 2 automatically follows message 1 after this pause.
+    var SECOND_MESSAGE_DELAY_MS = 3000;
+    // How long each hero welcome line stays on screen before fading out.
+    var HERO_STEP_HOLD_MS = 3200;
+
+    var heroDismissed = false;
+    var heroAwaitingScroll = false;
+    var onboardingBusy = false;
+    var secondMessageTimer = null;
+    var heroTimers = [];
+
+    function clearHeroTimers() {
+        heroTimers.forEach(function (timer) {
+            window.clearTimeout(timer);
         });
+        heroTimers = [];
+    }
+
+    function showHeroStep(name) {
+        heroSteps.forEach(function (step) {
+            if (step.getAttribute("data-hero-step") === name) {
+                step.classList.remove("is-leaving");
+                step.classList.add("is-active");
+            } else {
+                step.classList.remove("is-active");
+            }
+        });
+    }
+
+    function hideHeroStep(name) {
+        heroSteps.forEach(function (step) {
+            if (step.getAttribute("data-hero-step") === name) {
+                step.classList.remove("is-active");
+                step.classList.add("is-leaving");
+            }
+        });
+    }
+
+    // Fade in the two welcome lines in sequence, then wait for the visitor to
+    // scroll so the mascot stage can take over.
+    function playHeroIntro() {
+        showHeroStep("1");
+        heroTimers.push(window.setTimeout(function () {
+            hideHeroStep("1");
+            heroTimers.push(window.setTimeout(function () {
+                showHeroStep("2");
+                heroAwaitingScroll = true; // A scroll/click may now dismiss the hero.
+            }, 500));
+        }, HERO_STEP_HOLD_MS));
     }
 
     function startOnboarding() {
         heroEl.hidden = false; // Reveal the fullscreen hero for first-time visitors.
-        revealHero();
+        playHeroIntro();
         window.addEventListener("wheel", handleScrollIntent, { passive: true });
         window.addEventListener("touchmove", handleScrollIntent, { passive: true });
         window.addEventListener("keydown", handleScrollIntent);
@@ -316,6 +366,10 @@
     }
 
     function handleScrollIntent(event) {
+        if (heroDismissed || !heroAwaitingScroll) {
+            // Ignore gestures once the hero is gone or before it awaits a scroll.
+            return;
+        }
         if (event.type === "wheel" && event.deltaY <= 0) {
             return; // Ignore upward wheel gestures.
         }
@@ -329,15 +383,16 @@
     }
 
     // Welcome the visitor directly in the central bubble (never in the history).
+    // Returns a promise that resolves once the whole utterance has been typed.
     function greetInBubble(text) {
         refreshSuggestionRail();
         if (messageListEl.children.length > 0 || bubbleIsMessage()) {
             setMascotState("idle");
-            return;
+            return Promise.resolve();
         }
         setMascotState("speaking");
         setBusy(true);
-        typeBubbleMessage(text).then(function () {
+        return typeBubbleMessage(text).then(function () {
             setBusy(false);
             showChatPrompt();
         });
@@ -348,26 +403,113 @@
             return;
         }
         heroDismissed = true;
+        heroAwaitingScroll = false;
         localStorage.setItem(VISITED_KEY, "true");
 
-        // BarklAI moves closer and "sniffs" the new recruiter on the center stage.
+        clearHeroTimers();
+        onboardingBusy = true;
+
+        // Step 3: the comic "Sniff sniff" onomatopoeia flashes before the dog.
+        hideHeroStep("2");
+        window.setTimeout(function () {
+            showHeroStep("3");
+        }, 450);
+
+        // Then the whole overlay fades away and BarklAI takes the stage. The
+        // [hidden] rule guarantees it stays hidden once the transition ends.
+        window.setTimeout(function () {
+            hideHeroStep("3");
+            heroEl.classList.add("is-leaving");
+            window.setTimeout(function () {
+                heroEl.hidden = true;
+                heroEl.classList.remove("is-leaving");
+                heroSteps.forEach(function (step) {
+                    step.classList.remove("is-active", "is-leaving");
+                });
+            }, 750);
+            startSniffingSequence();
+        }, 1900);
+    }
+
+    // BarklAI sniffs the newcomer; the "Woof!" pops near the end of the clip,
+    // then he introduces himself straight into the comic speech bubble.
+    function startSniffingSequence() {
         setMascotState("sniffing");
         refreshSuggestionRail();
+        popBarkWhenSniffingEnds(function () {
+            window.setTimeout(function () {
+                greetInBubble(ONBOARDING_MESSAGE_1).then(scheduleSecondMessage);
+            }, 1400);
+        });
+    }
 
-        // Smooth full-viewport slide-out towards the chat section underneath.
-        // The [hidden] rule in base.html guarantees the overlay stays hidden
-        // once the transition finishes (flex must never override hidden).
-        heroEl.classList.add("is-leaving");
-        window.setTimeout(function () {
-            heroEl.hidden = true;
-            heroEl.classList.remove("is-ready", "is-leaving");
-        }, 900);
+    // Fire `onBark` once, when the sniffing clip is ~80% through (falls back to
+    // a fixed delay when the clip length is unknown).
+    function popBarkWhenSniffingEnds(onBark) {
+        var video = videos[0];
+        var fired = false;
 
-        // Once BarklAI stops sniffing he speaks the welcome message word by
-        // word straight into his comic speech bubble.
-        window.setTimeout(function () {
-            greetInBubble(HERO_GREETING);
-        }, 2600);
+        function popBark() {
+            if (fired) {
+                return;
+            }
+            fired = true;
+            if (barkOnomatopoeiaEl) {
+                barkOnomatopoeiaEl.classList.remove("is-visible");
+                void barkOnomatopoeiaEl.offsetWidth; // Restart the CSS animation.
+                barkOnomatopoeiaEl.classList.add("is-visible");
+            }
+            if (onBark) {
+                onBark();
+            }
+        }
+
+        if (!video) {
+            window.setTimeout(popBark, 2600);
+            return;
+        }
+        video.addEventListener("timeupdate", function () {
+            if (fired || !video.duration || !isFinite(video.duration)) {
+                return;
+            }
+            if (video.currentTime >= video.duration * 0.8) {
+                popBark();
+            }
+        });
+        window.setTimeout(popBark, 8000); // Safety net for very short clips.
+    }
+
+    // Message 2 lands automatically a few seconds after message 1.
+    function scheduleSecondMessage() {
+        if (secondMessageTimer) {
+            window.clearTimeout(secondMessageTimer);
+        }
+        secondMessageTimer = window.setTimeout(function () {
+            secondMessageTimer = null;
+            // Only speak if the conversation has not moved on in the meantime.
+            if (!bubbleIsMessage() || activeBubbleText !== ONBOARDING_MESSAGE_1) {
+                return;
+            }
+            setMascotState("speaking");
+            setBusy(true);
+            flushBubbleToHistory()
+                .then(function () {
+                    return typeBubbleMessage(ONBOARDING_MESSAGE_2);
+                })
+                .then(function () {
+                    onboardingBusy = false;
+                    setBusy(false);
+                    showChatPrompt();
+                });
+        }, SECOND_MESSAGE_DELAY_MS);
+    }
+
+    // Cancel the pending message-2 reveal once the visitor starts chatting.
+    function cancelSecondMessage() {
+        if (secondMessageTimer) {
+            window.clearTimeout(secondMessageTimer);
+            secondMessageTimer = null;
+        }
     }
 
     // ================================================================ //
@@ -406,6 +548,10 @@
         if (!text || formEl.dataset.busy === "true") {
             return;
         }
+
+        // The visitor is chatting: drop the scripted message-2 reveal, if pending.
+        cancelSecondMessage();
+        onboardingBusy = false;
 
         hideChatPrompt();
         hideSuggestionRail();
@@ -483,7 +629,7 @@
                 activeBubbleText = bubbleContent;
                 setBubbleContent(document.createTextNode(bubbleContent), false);
                 setMascotState(data.interview_requested ? "celebrating" : "idle");
-            } else {
+            } else if (!onboardingBusy) {
                 showBubbleIdle();
                 setMascotState(data.interview_requested ? "celebrating" : "idle");
             }

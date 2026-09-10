@@ -16,9 +16,9 @@
 .js-video-shell.is-missing video { display: none; }
 .js-video-shell.is-missing .video-fallback { display: flex; }
 
-/* Subtle custom scrollbar for the message thread. */
+/* Subtle custom scrollbar for the message thread (light theme). */
 #message-thread::-webkit-scrollbar { width: 6px; }
-#message-thread::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+#message-thread::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.06); }
 #message-thread::-webkit-scrollbar-thumb { background: rgba(245, 158, 11, 0.35); border-radius: 999px; }
 #message-thread::-webkit-scrollbar-thumb:hover { background: rgba(245, 158, 11, 0.6); }
 

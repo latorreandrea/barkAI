@@ -34,7 +34,7 @@
             {# Soft top gradient suggests the conversation keeps flowing upwards #}
             {# while the user scrolls back through the whole chat history.      #}
             <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 z-10 h-14
-                 bg-gradient-to-b from-slate-950 via-slate-950/85 to-transparent"></div>
+                 bg-gradient-to-b from-white via-white/85 to-transparent"></div>
 
             {# Scrollable message list. Newest rows sit at the bottom, right    #}
             {# above the speech bubble, so the hand-off animation reads as one  #}
@@ -49,7 +49,7 @@
         <!-- ============ MIDDLE: BARKLAI STAGE + LIVE SPEECH BUBBLE ============ -->
         <section id="mascot-stage" aria-label="BarklAI — live speech bubble"
                  class="relative z-20 flex shrink-0 flex-col items-center border-t-2 border-dashed
-                        border-white/10 bg-slate-950/30 px-4 pb-3 pt-5 md:pt-6">
+                        border-slate-200 bg-slate-50 px-4 pb-3 pt-5 md:pt-6">
 
             {# Spotlight glow behind the mascot. Declared as the first child so  #}
             {# it paints above the panel background but under the bubble/video.  #}
@@ -74,15 +74,20 @@
                 </svg>
             </div>
 
-            {# BarklAI circular video portrait (state-based MP4). The fallback   #}
-            {# emoji shows whenever a reaction clip is missing on disk.         #}
-            <div class="js-video-shell relative mt-7 flex h-36 w-36 items-center justify-center
-                        overflow-hidden rounded-full border-4 border-slate-900 bg-slate-950
-                        shadow-[0_0_0_5px_rgba(255,255,255,0.92),6px_6px_0_0_#0f172a]
-                        sm:h-44 sm:w-44 md:h-48 md:w-48">
-                <video class="js-mascot-video h-full w-full object-cover"
-                       autoplay muted loop playsinline preload="auto"></video>
-                <div class="video-fallback hidden h-full w-full items-center justify-center text-5xl">🐶</div>
+            {# BarklAI circular video portrait (state-based MP4) with the comic   #}
+            {# "Woof!" onomatopoeia that pops near the end of the sniffing clip.  #}
+            {# The fallback emoji shows whenever a reaction clip is missing.      #}
+            <div class="relative mt-7">
+                <div class="js-video-shell relative flex h-36 w-36 items-center justify-center
+                            overflow-hidden rounded-full border-4 border-slate-900 bg-white
+                            shadow-[0_0_0_5px_rgba(251,191,36,0.25),6px_6px_0_0_#0f172a]
+                            sm:h-44 sm:w-44 md:h-48 md:w-48">
+                    <video class="js-mascot-video h-full w-full object-cover"
+                           autoplay muted loop playsinline preload="auto"></video>
+                    <div class="video-fallback hidden h-full w-full items-center justify-center text-5xl">🐶</div>
+                </div>
+                <div id="bark-onomatopoeia" class="comic-onomatopoeia comic-bark"
+                     aria-hidden="true">Woof!</div>
             </div>
 
             {# Nameplate + live status pill (small, under the dog). #}
@@ -90,17 +95,17 @@
                 <p class="rounded-full border-2 border-slate-900 bg-amber-400 px-3 py-0.5
                           text-[10px] font-black uppercase tracking-[0.18em] text-slate-900
                           shadow-[2px_2px_0_0_#0f172a]">🐾 BarklAI</p>
-                <p data-mascot-status class="text-[11px] font-medium text-slate-400"></p>
+                <p data-mascot-status class="text-[11px] font-medium text-slate-500"></p>
             </div>
         </section>
 
         <!-- ==================== BOTTOM: STICKY COMIC COMPOSER ==================== -->
-        <footer class="sticky bottom-0 z-30 shrink-0 border-t-2 border-dashed border-white/10
-                       bg-slate-950/95 px-3 pb-2 pt-3 backdrop-blur md:px-4">
+        <footer class="sticky bottom-0 z-30 shrink-0 border-t-2 border-dashed border-slate-200
+                       bg-white/95 px-3 pb-2 pt-3 backdrop-blur md:px-4">
 
             {# Gentle hint shown after BarklAI's greeting (hidden by default). #}
             <p id="chat-prompt" hidden class="mb-2 text-center text-[11px] font-medium
-               text-amber-300/90">👇 Ask BarklAI your first question below!</p>
+               text-amber-600">👇 Ask BarklAI your first question below!</p>
 
             {# Quick-suggestion rail (hidden once a real user turn is sent). #}
             <div id="suggestion-rail" class="mx-auto mb-2 flex w-full max-w-xl items-center gap-2
@@ -120,9 +125,9 @@
                 <label for="chat-input" class="sr-only">Message BarklAI</label>
                 <input id="chat-input" name="message" type="text" required maxlength="2000"
                        placeholder="Ask BarklAI anything about Andrea's career…"
-                       class="min-w-0 flex-1 rounded-2xl border-2 border-white/15 bg-slate-800/90
-                              px-4 py-3 text-sm text-slate-100 placeholder-slate-500 outline-none
-                              transition focus:border-amber-400/70 focus:ring-2 focus:ring-amber-400/40
+                       class="min-w-0 flex-1 rounded-2xl border-2 border-slate-300 bg-white
+                              px-4 py-3 text-sm text-slate-900 placeholder-slate-400 outline-none
+                              transition focus:border-amber-500/70 focus:ring-2 focus:ring-amber-400/40
                               disabled:opacity-50" />
                 <button id="chat-send" type="submit"
                         class="shrink-0 rounded-2xl border-[3px] border-slate-900
@@ -140,46 +145,59 @@
             </form>
 
             <p class="mx-auto mt-1.5 max-w-xl text-center text-[10px] text-slate-500">
-                Session: <span id="session-chip" class="font-mono text-amber-400/80"></span> ·
+                Session: <span id="session-chip" class="font-mono text-amber-600"></span> ·
                 BarklAI answers from Andrea's career docs &amp; RAG-indexed projects.
             </p>
         </footer>
     </div>
 
     {# ---------------------------------------------------------------- #}
-    {# FIRST-VISIT ONBOARDING: fullscreen hero overlay. Hidden by default #}
-    {# and revealed by JS only when localStorage["barkai_visited"] is    #}
-    {# missing. On dismiss it slides up to reveal the mascot stage where #}
-    {# BarklAI sniffs the screen and greets the recruiter in the bubble. #}
+    {# FIRST-VISIT ONBOARDING: fullscreen white hero overlay, hidden by   #}
+    {# default and revealed by JS only when localStorage["barkai_visited"]#}
+    {# is missing. The welcome lines fade in and out in sequence:         #}
+    {#   1) "Come closer so we can get to know each other..."             #}
+    {#   2) "Scroll down to meet BarklAI" (waits for a scroll/click)      #}
+    {#   3) comic "Sniff sniff" onomatopoeia                              #}
+    {# Then the overlay fades away to reveal the mascot stage, where      #}
+    {# BarklAI sniffs, "woofs" and greets the recruiter in the bubble.    #}
     {# ---------------------------------------------------------------- #}
     <section id="hero-onboarding" hidden
-             class="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-slate-950
-                    px-6 text-center transition-all duration-700 ease-out">
-        <div class="hero-reveal mb-10 flex h-36 w-36 items-center justify-center rounded-full
-                    bg-gradient-to-br from-amber-500/20 via-orange-500/10 to-transparent text-8xl
-                    ring-1 ring-amber-500/20 md:h-44 md:w-44 md:text-9xl">
-            <span aria-hidden="true">🐶</span>
+             class="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-white
+                    px-6 text-center">
+
+        {# Step 1 — opening line + intro copy (fades in, holds, fades out). #}
+        <div class="hero-step" data-hero-step="1">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.3em] text-amber-600">An interactive career agent</p>
+            <h2 class="mt-4 max-w-3xl text-3xl font-extrabold leading-tight text-slate-900 md:text-5xl">
+                Come closer so we can get to know each other...
+            </h2>
+            <p class="mt-5 max-w-xl text-sm leading-relaxed text-slate-500 md:text-base">
+                BarklAI is a curious Cocker Spaniel with a nose for great engineers.
+                He has been waiting to sniff out your questions about Andrea's software development career.
+            </p>
         </div>
-        <p class="hero-reveal delay-1 text-[11px] font-semibold uppercase tracking-[0.3em] text-amber-400/80">An interactive career agent</p>
-        <h2 class="hero-reveal delay-1 mt-4 max-w-3xl text-3xl font-extrabold leading-tight text-white md:text-5xl">
-            Come closer so we can get to know each other...
-        </h2>
-        <p class="hero-reveal delay-2 mt-5 max-w-xl text-sm leading-relaxed text-slate-400 md:text-base">
-            BarklAI is a curious Cocker Spaniel with a nose for great engineers.
-            He has been waiting to sniff out your questions about Andrea's software development career.
-        </p>
-        <button type="button" id="hero-scroll-hint"
-                class="hero-reveal delay-3 mt-14 flex flex-col items-center gap-3 rounded-full
-                       border border-white/10 bg-white/5 px-6 py-3 text-[11px] font-semibold
-                       uppercase tracking-widest text-slate-300 transition
-                       hover:border-amber-400/40 hover:text-amber-300">
-            <span>Scroll down to meet BarklAI</span>
-            <svg class="h-4 w-4 animate-bounce text-amber-400" fill="none" stroke="currentColor"
-                 viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                      d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
-            </svg>
-        </button>
+
+        {# Step 2 — invite the visitor to scroll down (waits for the gesture). #}
+        <div class="hero-step" data-hero-step="2">
+            <button type="button" id="hero-scroll-hint"
+                    class="flex flex-col items-center gap-3 rounded-full border-2 border-slate-900
+                           bg-amber-400 px-6 py-3 text-[11px] font-black uppercase tracking-widest
+                           text-slate-900 shadow-[4px_4px_0_0_#0f172a] transition hover:bg-amber-300
+                           active:translate-x-[2px] active:translate-y-[2px]
+                           active:shadow-[2px_2px_0_0_#0f172a]">
+                <span>Scroll down to meet BarklAI</span>
+                <svg class="h-4 w-4 animate-bounce text-slate-900" fill="none" stroke="currentColor"
+                     viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+                </svg>
+            </button>
+        </div>
+
+        {# Step 3 — comic "Sniff sniff" onomatopoeia before the mascot enters. #}
+        <div class="hero-step" data-hero-step="3">
+            <span class="comic-onomatopoeia comic-sniff">Sniff&nbsp;sniff</span>
+        </div>
     </section>
 {% endblock %}
 
