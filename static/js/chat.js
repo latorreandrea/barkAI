@@ -55,8 +55,8 @@
     var historyToggleIconEl = document.getElementById("history-toggle-icon");
     var bubbleTextEl = document.getElementById("speech-bubble-text");
     var bubbleScrollEl = document.getElementById("speech-bubble-scroll");
-    var promptEl = document.getElementById("chat-prompt");
-    var suggestionRailEl = document.getElementById("suggestion-rail");
+    var idleSuggestionsEl = document.getElementById("idle-suggestions");
+    var idleSuggestionsTextEl = document.getElementById("idle-suggestions-text");
 
     if (sessionChip) {
         sessionChip.textContent = sessionId.slice(0, 8) + "…";
@@ -123,6 +123,8 @@
     }
 
     function setBubbleContent(node, idle) {
+        // Any real bubble content replaces the idle-suggestion nudge.
+        hideIdleSuggestions();
         if (typeTimer) {
             window.clearInterval(typeTimer);
             typeTimer = null;
@@ -267,31 +269,79 @@
     }
 
     // ================================================================ //
-    // 7) COMPOSER HINT + SUGGESTION RAIL                               //
+    // 7) IDLE SUGGESTIONS: after a spell of inactivity BarklAI himself  //
+    //    suggests a few questions, right inside his own speech bubble.  //
     // ================================================================ //
-    function showChatPrompt() {
-        if (promptEl) {
-            promptEl.hidden = false;
+    // No typing and no sending for a minute: the chips show up...
+    var IDLE_DELAY_MS = 60000;
+    // ...and if a draft keeps sitting in the composer for a long while, a
+    // friendlier nudge replaces the default one.
+    var TYPING_STUCK_DELAY_MS = 300000;
+    var IDLE_HINT = "👇 Ask BarklAI your first question below!";
+    var TYPING_HINT = "🐾 Take your time! Or pick a shortcut to get started:";
+
+    var idleTimer = null;
+    var typingTimer = null;
+
+    // Reveal the chips inside the bubble, as if BarklAI just said them.
+    function showIdleSuggestions(message) {
+        if (idleSuggestionsTextEl) {
+            idleSuggestionsTextEl.textContent = message || IDLE_HINT;
+        }
+        if (idleSuggestionsEl) {
+            idleSuggestionsEl.hidden = false;
+        }
+        if (bubbleScrollEl) {
+            // Grow the bubble so every chip is visible, and rewind to the top.
+            bubbleScrollEl.classList.add("is-suggesting");
+            bubbleScrollEl.scrollTop = 0;
         }
     }
 
-    function hideChatPrompt() {
-        if (promptEl) {
-            promptEl.hidden = true;
+    function hideIdleSuggestions() {
+        if (idleSuggestionsEl) {
+            idleSuggestionsEl.hidden = true;
+        }
+        if (bubbleScrollEl) {
+            bubbleScrollEl.classList.remove("is-suggesting");
         }
     }
 
-    function hideSuggestionRail() {
-        if (suggestionRailEl) {
-            suggestionRailEl.classList.add("hidden");
+    function clearIdleTimer() {
+        if (idleTimer) {
+            window.clearTimeout(idleTimer);
+            idleTimer = null;
         }
     }
 
-    // Quick-prompt chips stay visible only while the conversation is empty.
-    function refreshSuggestionRail() {
-        if (messageListEl.children.length > 0) {
-            hideSuggestionRail();
+    function clearTypingTimer() {
+        if (typingTimer) {
+            window.clearTimeout(typingTimer);
+            typingTimer = null;
         }
+    }
+
+    // (Re)start the "visitor is idle" countdown.
+    function armIdleTimer() {
+        clearIdleTimer();
+        idleTimer = window.setTimeout(function () {
+            showIdleSuggestions(IDLE_HINT);
+        }, IDLE_DELAY_MS);
+    }
+
+    // The visitor has been drafting a message for a long time: offer a hand.
+    function armTypingTimer() {
+        clearTypingTimer();
+        typingTimer = window.setTimeout(function () {
+            showIdleSuggestions(TYPING_HINT);
+        }, TYPING_STUCK_DELAY_MS);
+    }
+
+    // Any real user action drops the nudge and stops both countdowns.
+    function cancelIdleSuggestions() {
+        clearIdleTimer();
+        clearTypingTimer();
+        hideIdleSuggestions();
     }
 
     // ================================================================ //
@@ -391,7 +441,6 @@
     // Welcome the visitor directly in the central bubble (never in the history).
     // Returns a promise that resolves once the whole utterance has been typed.
     function greetInBubble(text) {
-        refreshSuggestionRail();
         if (messageListEl.children.length > 0 || bubbleIsMessage()) {
             setMascotState("idle");
             return Promise.resolve();
@@ -400,7 +449,7 @@
         setBusy(true);
         return typeBubbleMessage(text).then(function () {
             setBusy(false);
-            showChatPrompt();
+            armIdleTimer(); // BarklAI is quiet: start the idle-suggestion countdown.
         });
     }
 
@@ -437,52 +486,73 @@
         }, 1900);
     }
 
-    // BarklAI sniffs the newcomer; the "Woof!" pops near the end of the clip,
-    // then he introduces himself straight into the comic speech bubble.
+    // BarklAI sniffs the newcomer. The "Woof!" pops ~2 s earlier than before
+    // (around the middle of the clip), then he introduces himself once the
+    // sniffing clip has played through. The two beats are independent, so
+    // moving the bark does not shift the greeting.
     function startSniffingSequence() {
         setMascotState("sniffing");
-        refreshSuggestionRail();
-        popBarkWhenSniffingEnds(function () {
-            window.setTimeout(function () {
-                greetInBubble(ONBOARDING_MESSAGE_1).then(scheduleSecondMessage);
-            }, 1400);
-        });
-    }
 
-    // Fire `onBark` once, when the sniffing clip is ~80% through (falls back to
-    // a fixed delay when the clip length is unknown).
-    function popBarkWhenSniffingEnds(onBark) {
         var video = videos[0];
-        var fired = false;
+        var barkFired = false;
+        var messageStarted = false;
 
-        function popBark() {
-            if (fired) {
+        function fireBark() {
+            if (barkFired) {
                 return;
             }
-            fired = true;
+            barkFired = true;
             if (barkOnomatopoeiaEl) {
                 barkOnomatopoeiaEl.classList.remove("is-visible");
                 void barkOnomatopoeiaEl.offsetWidth; // Restart the CSS animation.
                 barkOnomatopoeiaEl.classList.add("is-visible");
             }
-            if (onBark) {
-                onBark();
-            }
         }
 
-        if (!video) {
-            window.setTimeout(popBark, 2600);
-            return;
-        }
-        video.addEventListener("timeupdate", function () {
-            if (fired || !video.duration || !isFinite(video.duration)) {
+        function startMessage() {
+            if (messageStarted) {
                 return;
             }
-            if (video.currentTime >= video.duration * 0.8) {
-                popBark();
+            messageStarted = true;
+            greetInBubble(ONBOARDING_MESSAGE_1).then(scheduleSecondMessage);
+        }
+
+        function arm() {
+            var duration = (video && video.duration && isFinite(video.duration))
+                ? video.duration : 0;
+            if (!duration) {
+                window.setTimeout(fireBark, 3500);
+                window.setTimeout(startMessage, 6800);
+                return;
             }
-        });
-        window.setTimeout(popBark, 8000); // Safety net for very short clips.
+            // Woof ~2 seconds earlier than the previous 80% mark.
+            var barkAt = Math.max(0, duration * 0.8 - 2);
+            window.setTimeout(fireBark, Math.max(0, (barkAt - video.currentTime) * 1000));
+            // Greeting once the sniffing clip has played through (~unchanged).
+            window.setTimeout(startMessage, duration * 1000);
+        }
+
+        if (video) {
+            if (video.readyState >= 1) {
+                arm();
+            } else {
+                video.addEventListener("loadedmetadata", arm, { once: true });
+            }
+            video.addEventListener("timeupdate", function () {
+                if (barkFired || !video.duration || !isFinite(video.duration)) {
+                    return;
+                }
+                if (video.currentTime >= Math.max(0, video.duration * 0.8 - 2)) {
+                    fireBark();
+                }
+            });
+        } else {
+            arm();
+        }
+
+        // Safety nets in case the clip metadata never arrives.
+        window.setTimeout(fireBark, 8000);
+        window.setTimeout(startMessage, 9000);
     }
 
     // Message 2 lands automatically a few seconds after message 1.
@@ -505,7 +575,7 @@
                 .then(function () {
                     onboardingBusy = false;
                     setBusy(false);
-                    showChatPrompt();
+                    armIdleTimer();
                 });
         }, SECOND_MESSAGE_DELAY_MS);
     }
@@ -555,12 +625,12 @@
             return;
         }
 
-        // The visitor is chatting: drop the scripted message-2 reveal, if pending.
+        // The visitor is chatting: drop the scripted message-2 reveal and the
+        // idle-suggestion nudge, then clear the composer.
         cancelSecondMessage();
+        cancelIdleSuggestions();
         onboardingBusy = false;
 
-        hideChatPrompt();
-        hideSuggestionRail();
         inputEl.value = "";
         setBusy(true);
 
@@ -601,6 +671,7 @@
             );
         } finally {
             setBusy(false);
+            armIdleTimer(); // Chat is quiet again: restart the idle countdown.
         }
     }
 
@@ -626,7 +697,6 @@
             messages.forEach(function (message) {
                 addMessageRow(message.sender, message.content, false);
             });
-            refreshSuggestionRail();
 
             if (data.messages.length === 0 && !isFirstVisit) {
                 // Recurring visitor with an empty session: warm spoken hello.
@@ -665,6 +735,9 @@
 
         // Load history in the background (empty for a brand-new session).
         await loadHistory();
+
+        // Once the chat is quiet, wait a while before BarklAI nudges with ideas.
+        armIdleTimer();
 
         if (!isFirstVisit && inputEl && !inputEl.disabled) {
             inputEl.focus();
@@ -706,6 +779,10 @@
         if (historyToggleIconEl) {
             historyToggleIconEl.textContent = expanded ? "✕" : "⤢";
         }
+        if (expanded) {
+            // Opening the history: jump straight to the most recent message.
+            scrollThreadToBottom();
+        }
     }
 
     if (historyToggleEl) {
@@ -745,6 +822,19 @@
         sendMessage();
     });
     wireSuggestions();
+
+    // Typing counts as activity: restart the idle countdown, and start the
+    // "long draft" clock while a non-empty message sits in the composer.
+    inputEl.addEventListener("input", function () {
+        armIdleTimer();
+        if (inputEl.value.trim() !== "") {
+            if (!typingTimer) {
+                armTypingTimer();
+            }
+        } else {
+            clearTypingTimer();
+        }
+    });
 
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", init);

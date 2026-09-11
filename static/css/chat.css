@@ -83,10 +83,13 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* Expandable history: the pane overlays the whole chat column so the  */
-/* visitor can browse the conversation with a full-height scroll area. */
+/* History: hidden in the live chat (only the mascot shows) and shown  */
+/* as a full-screen overlay when the visitor toggles it on.            */
 /* ------------------------------------------------------------------ */
+#history-pane { display: none; }
+
 #chat-layout.is-history-expanded #history-pane {
+    display: flex;
     position: absolute;
     inset: 0;
     z-index: 40;
@@ -168,10 +171,24 @@
 /* Composer helpers.                                                   */
 /* ------------------------------------------------------------------ */
 
-/* Intermittent breathing on the "first question" hint. */
-#chat-prompt { animation: promptBreathe 2.4s ease-in-out infinite; }
+/* ------------------------------------------------------------------ */
+/* Idle suggestions: BarklAI "says" them inside his own speech bubble  */
+/* after a spell of inactivity. The bubble grows to fit the chips, and */
+/* the live message is hidden while they are showing.                  */
+/* ------------------------------------------------------------------ */
+#speech-bubble-scroll.is-suggesting { max-height: 10rem; }
+#speech-bubble-scroll.is-suggesting #speech-bubble-text { display: none; }
+
+#idle-suggestions { animation: nudgeIn .45s ease both; }
+@keyframes nudgeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* Intermittent breathing on the nudge line inside the bubble. */
+.nudge-prompt { animation: promptBreathe 2.4s ease-in-out infinite; }
 @keyframes promptBreathe {
-    0%, 100% { opacity: .45; }
+    0%, 100% { opacity: .55; }
     50%      { opacity: 1; }
 }
 
