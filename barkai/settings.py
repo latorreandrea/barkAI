@@ -15,6 +15,9 @@ Configuration philosophy
 
 import os
 from pathlib import Path
+from urllib.parse import parse_qsl, unquote, urlparse
+
+from django.utils.translation import gettext_lazy as _
 
 # Build paths inside the project like this: BASE_DIR / "subdir".
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -84,6 +87,9 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    # LocaleMiddleware must sit after SessionMiddleware (it reads the session
+    # language) and before CommonMiddleware (it rewrites the request path).
+    "django.middleware.locale.LocaleMiddleware",
     # CORS middleware must sit above CommonMiddleware so headers are added early.
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -105,6 +111,8 @@ TEMPLATES = [
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.request",
+                # Exposes LANGUAGE_CODE / LANGUAGES to templates (html lang, toggle).
+                "django.template.context_processors.i18n",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
             ],
@@ -115,11 +123,33 @@ TEMPLATES = [
 WSGI_APPLICATION = "barkai.wsgi.application"
 
 # --- Database -------------------------------------------------------------
-# Local development (DEBUG=True) keeps the zero-config SQLite database, so a
-# fresh clone runs without any external service. Production deployments
-# (DEBUG=False) MUST read the database settings from the environment via
-# os.getenv() instead of relying on anything hard-coded in this file.
-if DEBUG:
+# Priority: DATABASE_URL (one connection string, e.g. Neon/Supabase — required
+# for pgvector, which needs PostgreSQL) > zero-config SQLite while DEBUG > the
+# explicit DB_* variables in production.
+def database_from_url(url: str) -> dict:
+    """Turn a ``postgres://`` connection string into a Django DATABASES entry."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("postgres", "postgresql", "postgresql+psycopg"):
+        raise ValueError(f"Unsupported DATABASE_URL scheme: {parsed.scheme!r}")
+    options = dict(parse_qsl(parsed.query))
+    config = {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": parsed.path.lstrip("/") or "postgres",
+        "USER": unquote(parsed.username or ""),
+        "PASSWORD": unquote(parsed.password or ""),
+        "HOST": parsed.hostname or "",
+        "PORT": str(parsed.port or ""),
+    }
+    if options:
+        config["OPTIONS"] = options
+    return config
+
+
+DATABASE_URL = env_str("DATABASE_URL", "")
+
+if DATABASE_URL:
+    DATABASES = {"default": database_from_url(DATABASE_URL)}
+elif DEBUG:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
@@ -147,7 +177,16 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 # --- Internationalization -------------------------------------------------
-LANGUAGE_CODE = "en-us"
+# English is the source language; Danish is the primary target audience.
+# LocaleMiddleware negotiates the active language from the browser's
+# Accept-Language header and the visitor can override it with the navbar toggle.
+LANGUAGE_CODE = "en"
+LANGUAGES = [
+    ("en", _("English")),
+    ("da", _("Danish")),
+]
+# Where `makemessages` writes and `compilemessages` reads the .po/.mo catalogs.
+LOCALE_PATHS = [BASE_DIR / "locale"]
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
@@ -184,6 +223,31 @@ GROQ_TEMPERATURE = env_float("GROQ_TEMPERATURE", 0.5)
 AGENT_HISTORY_LIMIT = env_int("AGENT_HISTORY_LIMIT", 20)
 # How much knowledge-base text is injected into the system prompt.
 AGENT_KNOWLEDGE_MAX_CHARS = env_int("AGENT_KNOWLEDGE_MAX_CHARS", 12000)
+
+# --- RAG / embeddings -----------------------------------------------------
+# Pluggable embedding provider for the retrieval layer:
+#   "cloudflare" -> Cloudflare Workers AI (multilingual, 1024 dims)
+#   "none"       -> retrieval disabled (context stuffing only)
+EMBEDDING_PROVIDER = env_str("EMBEDDING_PROVIDER", "none")
+EMBEDDING_MODEL = env_str("EMBEDDING_MODEL", "@cf/baai/bge-m3")
+EMBEDDING_DIMENSIONS = env_int("EMBEDDING_DIMENSIONS", 1024)
+EMBEDDING_TIMEOUT_SECONDS = env_float("EMBEDDING_TIMEOUT_SECONDS", 30.0)
+EMBEDDING_BATCH_SIZE = env_int("EMBEDDING_BATCH_SIZE", 32)
+CLOUDFLARE_ACCOUNT_ID = env_str("CLOUDFLARE_ACCOUNT_ID", "")
+CLOUDFLARE_API_TOKEN = env_str("CLOUDFLARE_API_TOKEN", "")
+# Retrieval knobs.
+RAG_ENABLED = env_bool("RAG_ENABLED", default="False")
+RAG_TOP_K = env_int("RAG_TOP_K", 5)
+RAG_MIN_SCORE = env_float("RAG_MIN_SCORE", 0.25)
+# Chunks longer than this many characters are split during indexing.
+RAG_CHUNK_MAX_CHARS = env_int("RAG_CHUNK_MAX_CHARS", 1200)
+
+# --- Privacy / GDPR -------------------------------------------------------
+# Conversations older than this many days are purged by
+# `python manage.py purge_old_sessions` (data minimisation, art. 5 GDPR).
+SESSION_RETENTION_DAYS = env_int("SESSION_RETENTION_DAYS", 90)
+# Address shown in the privacy notice for data-subject requests.
+PRIVACY_CONTACT_EMAIL = env_str("PRIVACY_CONTACT_EMAIL", "latorre.andrea.93@gmail.com")
 
 # Knowledge ingestion from GitHub (see `python manage.py sync_knowledge`).
 GITHUB_USERNAME = env_str("GITHUB_USERNAME", "")

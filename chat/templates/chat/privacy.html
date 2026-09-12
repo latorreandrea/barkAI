@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Privacy notice" %}{% endblock %}
+
+{% block content %}
+    <article class="mx-auto w-full max-w-2xl overflow-y-auto px-6 py-10 text-sm leading-relaxed text-slate-600">
+        <h1 class="text-2xl font-extrabold text-slate-900">{% trans "Privacy notice" %}</h1>
+        <p class="mt-3">
+            {% trans "BarkAI is a personal portfolio project. This notice explains, in plain language, what happens to the information you share in the chat." %}
+        </p>
+
+        <h2 class="mt-6 text-lg font-bold text-slate-900">{% trans "Who is responsible" %}</h2>
+        <p class="mt-2">
+            {% blocktrans %}The data controller is Andrea Latorre. For any privacy request, write to {{ privacy_contact_email }}.{% endblocktrans %}
+        </p>
+
+        <h2 class="mt-6 text-lg font-bold text-slate-900">{% trans "What we process" %}</h2>
+        <p class="mt-2">
+            {% trans "The messages you send, a random session identifier stored in your browser, and any name, email or company you choose to share." %}
+        </p>
+
+        <h2 class="mt-6 text-lg font-bold text-slate-900">{% trans "Why we process it" %}</h2>
+        <p class="mt-2">
+            {% trans "Only to answer your questions about Andrea's professional background and, if you ask, to flag an interview request. No profiling, no advertising, no selling of data." %}
+        </p>
+
+        <h2 class="mt-6 text-lg font-bold text-slate-900">{% trans "Who we share it with" %}</h2>
+        <p class="mt-2">
+            {% trans "Messages are sent to Groq (the language model) and to Cloudflare Workers AI (to embed the text for search). Neither provider trains its models on this data. The application and database are hosted with their own processors." %}
+        </p>
+
+        <h2 class="mt-6 text-lg font-bold text-slate-900">{% trans "How long we keep it" %}</h2>
+        <p class="mt-2">
+            {% blocktrans %}Conversations are deleted automatically after {{ retention_days }} days of inactivity.{% endblocktrans %}
+        </p>
+
+        <h2 class="mt-6 text-lg font-bold text-slate-900">{% trans "Your rights" %}</h2>
+        <p class="mt-2">
+            {% trans "You can access and erase your conversation at any time: the 'Delete my conversation' button on the chat page removes it immediately from the database." %}
+        </p>
+
+        <h2 class="mt-6 text-lg font-bold text-slate-900">{% trans "Cookies and local storage" %}</h2>
+        <p class="mt-2">
+            {% trans "No tracking or advertising cookies are used. Your browser only stores the session identifier and a flag that remembers you already saw the introduction." %}
+        </p>
+
+        <p class="mt-8 text-xs text-slate-400">
+            {% trans "This notice is a plain-language draft and does not replace professional legal advice." %}
+        </p>
+
+        <a href="{% url 'chat:index' %}"
+           class="mt-6 inline-block rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 px-6 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/25 transition hover:from-amber-400 hover:to-orange-400">
+            {% trans "Back to the chat" %}
+        </a>
+    </article>
+{% endblock %}

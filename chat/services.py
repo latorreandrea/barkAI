@@ -14,6 +14,7 @@ import logging
 from dataclasses import dataclass
 
 from django.conf import settings
+from django.utils.translation import gettext
 
 from chat.models import KnowledgeDocument
 from chat.prompts import build_system_prompt
@@ -91,7 +92,7 @@ def generate_reply(
     except Exception as exc:  # noqa: BLE001 - any client/network failure -> copy
         logger.exception("Groq request failed: %s", exc)
         return BarkleyResponse(
-            reply=FALLBACK_UNREACHABLE,
+            reply=gettext(FALLBACK_UNREACHABLE),
             barkley_state="speaking",
             interview_requested=False,
         )
@@ -110,13 +111,32 @@ def get_knowledge_text() -> str:
     return "\n\n".join(chunks)[:max_chars]
 
 
+def _knowledge_for_prompt(user_message: str) -> str:
+    """Knowledge text for the system prompt.
+
+    With RAG enabled (``RAG_ENABLED=True``) only the chunks that match the
+    question are sent; otherwise the whole knowledge base is stuffed in, as a
+    safe fallback for a small corpus.
+    """
+    if getattr(settings, "RAG_ENABLED", False):
+        from chat.rag import build_retrieved_context
+
+        context = build_retrieved_context(user_message)
+        if context:
+            return context
+    return get_knowledge_text()
+
+
 def _call_groq(user_message: str, history: list[dict], api_key: str) -> str:
     """Call Groq in JSON mode and return the raw assistant content."""
     from groq import Groq  # Imported lazily so the mock path needs no SDK.
 
     client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
     messages = [
-        {"role": "system", "content": build_system_prompt(get_knowledge_text())}
+        {
+            "role": "system",
+            "content": build_system_prompt(_knowledge_for_prompt(user_message)),
+        }
     ]
     limit = getattr(settings, "AGENT_HISTORY_LIMIT", 20)
     for turn in history[-limit:]:
@@ -172,12 +192,12 @@ def _offline_reply(user_message: str) -> BarkleyResponse:
     text = user_message.lower()
     if any(hint in text for hint in _INTERVIEW_HINTS):
         return BarkleyResponse(
-            reply=FALLBACK_INTERVIEW,
+            reply=gettext(FALLBACK_INTERVIEW),
             barkley_state="celebrating",
             interview_requested=True,
         )
     return BarkleyResponse(
-        reply=FALLBACK_NO_KEY,
+        reply=gettext(FALLBACK_NO_KEY),
         barkley_state="speaking",
         interview_requested=False,
     )

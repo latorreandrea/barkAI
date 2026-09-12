@@ -6,6 +6,7 @@ the individual user/assistant turns that belong to that session.
 import uuid
 
 from django.db import models
+from pgvector.django import VectorField
 
 
 class ChatSession(models.Model):
@@ -98,3 +99,35 @@ class KnowledgeDocument(models.Model):
 
     def __str__(self) -> str:
         return f"{self.get_kind_display()}: {self.source}"
+
+
+class KnowledgeChunk(models.Model):
+    """A retrievable slice of a ``KnowledgeDocument`` plus its embedding vector.
+
+    The vector column uses pgvector (1024 dimensions = ``@cf/baai/bge-m3``).
+    Retrieval works natively on PostgreSQL; on other backends it falls back to
+    a Python cosine similarity so development and the test suite stay portable.
+    """
+
+    class Meta:
+        ordering = ["document", "ordinal"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["document", "ordinal"], name="uniq_chunk_document_ordinal"
+            ),
+        ]
+
+    document = models.ForeignKey(
+        KnowledgeDocument,
+        on_delete=models.CASCADE,
+        related_name="chunks",
+    )
+    ordinal = models.PositiveIntegerField("Ordinal")
+    content = models.TextField("Content")
+    token_count = models.PositiveIntegerField("Tokens", default=0)
+    content_hash = models.CharField("Content hash", max_length=64, db_index=True)
+    embedding = VectorField("Embedding", dimensions=1024, null=True)
+    indexed_at = models.DateTimeField("Indexed at", auto_now=True)
+
+    def __str__(self) -> str:
+        return f"{self.document.source} #{self.ordinal}"

@@ -1,17 +1,18 @@
 {% extends "base.html" %}
+{% load i18n %}
 
-{% block title %}404 Page Not Found{% endblock %}
+{% block title %}{% trans "404 Page Not Found" %}{% endblock %}
 
 {% block content %}
     <div class="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6 px-6 py-12 text-center">
         <div class="flex h-28 w-28 items-center justify-center rounded-full bg-slate-100 text-6xl ring-1 ring-slate-200">🐶</div>
         <div>
             <p class="text-xs font-semibold uppercase tracking-widest text-amber-600">Error 404</p>
-            <h1 class="mt-2 text-3xl font-bold">Page Not Found</h1>
+            <h1 class="mt-2 text-3xl font-bold">{% trans "Page Not Found" %}</h1>
             <p class="mx-auto mt-3 max-w-md text-sm leading-relaxed text-slate-500">
-                Woof! BarklAI sniffed around but could not find that page. It may have moved or never existed.
+                {% trans "Woof! BarklAI sniffed around but could not find that page. It may have moved or never existed." %}
             </p>
         </div>
-        <a href="/" class="rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 px-6 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/25 transition hover:from-amber-400 hover:to-orange-400">Back to home</a>
+        <a href="/" class="rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 px-6 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/25 transition hover:from-amber-400 hover:to-orange-400">{% trans "Back to home" %}</a>
     </div>
 {% endblock %}

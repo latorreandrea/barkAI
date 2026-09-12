@@ -1,7 +1,7 @@
 """Admin registrations for the chat application."""
 from django.contrib import admin
 
-from .models import ChatMessage, ChatSession, KnowledgeDocument
+from .models import ChatMessage, ChatSession, KnowledgeChunk, KnowledgeDocument
 
 
 @admin.register(ChatSession)
@@ -42,3 +42,16 @@ class KnowledgeDocumentAdmin(admin.ModelAdmin):
     def characters(self, obj: KnowledgeDocument) -> int:
         """Show how large the stored document is, in characters."""
         return len(obj.content)
+
+
+@admin.register(KnowledgeChunk)
+class KnowledgeChunkAdmin(admin.ModelAdmin):
+    list_display = ("document", "ordinal", "token_count", "has_embedding", "indexed_at")
+    list_filter = ("document__kind", "indexed_at")
+    search_fields = ("content", "document__source")
+    readonly_fields = ("content_hash", "indexed_at")
+
+    @admin.display(boolean=True, description="Embedded")
+    def has_embedding(self, obj: KnowledgeChunk) -> bool:
+        """True once the chunk has been embedded by build_index."""
+        return obj.embedding is not None

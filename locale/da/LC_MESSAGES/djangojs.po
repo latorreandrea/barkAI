@@ -1,0 +1,68 @@
+# Danish (da) translations for barkAI — JavaScript strings (djangojs domain).
+# Compiled with scripts/compile_messages.py (no gettext required).
+msgid ""
+msgstr ""
+"Project-Id-Version: barkAI\n"
+"Report-Msgid-Bugs-To: \n"
+"Language: da\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "BarklAI is ready — ask me anything!"
+msgstr "BarklAI er klar — spørg mig om alt!"
+
+msgid "BarklAI caught your scent — coming closer…"
+msgstr "BarklAI fangede din duft — kommer nærmere…"
+
+msgid "BarklAI is searching repositories…"
+msgstr "BarklAI søger i repositories…"
+
+msgid "BarklAI is typing…"
+msgstr "BarklAI skriver…"
+
+msgid "BarklAI is speaking…"
+msgstr "BarklAI taler…"
+
+msgid "BarklAI found an interview opportunity! 🎉"
+msgstr "BarklAI fandt en mulighed for samtale! 🎉"
+
+msgid "You"
+msgstr "Dig"
+
+msgid "BarklAI 🐾"
+msgstr "BarklAI 🐾"
+
+msgid "👇 Ask BarklAI your first question below!"
+msgstr "👇 Stil BarklAI dit første spørgsmål nedenfor!"
+
+msgid "🐾 Take your time! Or pick a shortcut to get started:"
+msgstr "🐾 Tag dig god tid! Eller vælg en genvej for at komme i gang:"
+
+msgid "Woof! Wait... [sniff, sniff]... I smell clean code and new opportunities! Hi! I'm BarkAI. What brings you here? Are you looking for the right dev for your team?"
+msgstr "Vov! Vent ... [snus, snus] ... jeg kan lugte ren kode og nye muligheder! Hej! Jeg er BarkAI. Hvad bringer dig her? Leder du efter den rette udvikler til dit team?"
+
+msgid "Perfect! Then you're in the right place. If you want to learn more about Andrea's work, his skills, or chat about his projects (or even figure out how he can help you solve a specific technical challenge), just tell me: I'm all ears!"
+msgstr "Perfekt! Så er du det helt rigtige sted. Hvis du vil vide mere om Andreas arbejde, hans kompetencer eller tale om hans projekter (eller finde ud af, hvordan han kan hjælpe dig med en bestemt teknisk udfordring), så sig endelig til: jeg er lutter ører!"
+
+msgid "Woof! 👋 I'm BarklAI, Andrea's AI career companion. Ask me about his open-source projects, Python/Django experience, or RAG pipelines — or request an interview right here!"
+msgstr "Vov! 👋 Jeg er BarklAI, Andreas AI-karrierefølgesvend. Spørg mig om hans open source-projekter, Python/Django-erfaring eller RAG-pipelines — eller bed om en samtale lige her!"
+
+msgid "Live chat"
+msgstr "Live chat"
+
+msgid "History"
+msgstr "Historik"
+
+msgid "Woof… sorry, I could not reach my backend"
+msgstr "Vov… beklager, jeg kunne ikke få fat i min backend"
+
+msgid "Please try again."
+msgstr "Prøv venligst igen."
+
+msgid "Woof… I could not load the conversation history"
+msgstr "Vov… jeg kunne ikke indlæse samtalehistorikken"
+
+msgid "Delete this conversation? This cannot be undone."
+msgstr "Vil du slette denne samtale? Det kan ikke fortrydes."

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% load static %}
+{% load static i18n %}
 
-{% block title %}BarkAI — Chat with BarklAI 🐾{% endblock %}
+{% block title %}{% trans "BarkAI — Chat with BarklAI 🐾" %}{% endblock %}
 
 {# data-session-id: optional UUID from ?session_id= ; data-media-url: /static/mascot/ #}
 {% block body_attrs %}
@@ -34,13 +34,13 @@
                        uppercase tracking-wider text-slate-900 shadow-[3px_3px_0_0_#0f172a]
                        transition hover:bg-amber-100"
                 aria-expanded="false" aria-controls="history-pane"
-                aria-label="Toggle chat history">
+                aria-label="{% trans 'Toggle chat history' %}">
             <span id="history-toggle-icon" aria-hidden="true">⤢</span>
-            <span id="history-toggle-label">History</span>
+            <span id="history-toggle-label">{% trans "History" %}</span>
         </button>
 
         <!-- ==================== TOP: CHAT HISTORY ==================== -->
-        <section id="history-pane" aria-label="Chat history"
+        <section id="history-pane" aria-label="{% trans 'Chat history' %}"
                  class="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
 
             {# Soft top gradient suggests the conversation keeps flowing upwards #}
@@ -59,7 +59,7 @@
         </section>
 
         <!-- ============ MIDDLE: BARKLAI STAGE + LIVE SPEECH BUBBLE ============ -->
-        <section id="mascot-stage" aria-label="BarklAI — live speech bubble"
+        <section id="mascot-stage" aria-label="{% trans 'BarklAI — live speech bubble' %}"
                  class="relative z-20 flex min-h-0 flex-1 flex-col items-center justify-center
                         bg-white px-4 pb-3 pt-5 md:pt-6">
 
@@ -85,17 +85,21 @@
                     <div id="idle-suggestions" hidden class="mt-2.5">
                         <p id="idle-suggestions-text"
                            class="nudge-prompt mb-2 text-[14px] font-semibold leading-snug text-slate-900">
-                            👇 Ask BarklAI your first question below!
+                            {% trans "👇 Ask BarklAI your first question below!" %}
                         </p>
                         <div class="flex flex-wrap gap-2">
-                            <button type="button" data-suggestion="Tell me about Andrea's background and career."
-                                    class="suggestion-chip">💼 Background</button>
-                            <button type="button" data-suggestion="Which Python and Django projects has Andrea built?"
-                                    class="suggestion-chip">🐍 Python &amp; Django projects</button>
-                            <button type="button" data-suggestion="Explain how Andrea builds RAG pipelines and AI agents."
-                                    class="suggestion-chip">🧠 RAG &amp; AI agents</button>
-                            <button type="button" data-suggestion="I would like to schedule an interview with Andrea."
-                                    class="suggestion-chip is-primary">🗓 Request an interview</button>
+                            {% trans "Tell me about Andrea's background and career." as chip_background %}
+                            {% trans "Which Python and Django projects has Andrea built?" as chip_python %}
+                            {% trans "Explain how Andrea builds RAG pipelines and AI agents." as chip_rag %}
+                            {% trans "I would like to schedule an interview with Andrea." as chip_interview %}
+                            <button type="button" data-suggestion="{{ chip_background }}"
+                                    class="suggestion-chip">{% trans "💼 Background" %}</button>
+                            <button type="button" data-suggestion="{{ chip_python }}"
+                                    class="suggestion-chip">{% trans "🐍 Python & Django projects" %}</button>
+                            <button type="button" data-suggestion="{{ chip_rag }}"
+                                    class="suggestion-chip">{% trans "🧠 RAG & AI agents" %}</button>
+                            <button type="button" data-suggestion="{{ chip_interview }}"
+                                    class="suggestion-chip is-primary">{% trans "🗓 Request an interview" %}</button>
                         </div>
                     </div>
                 </div>
@@ -116,7 +120,7 @@
                            autoplay muted loop playsinline preload="auto"></video>
                     <div class="video-fallback hidden h-40 w-40 items-center justify-center text-6xl">🐶</div>
                     <div id="bark-onomatopoeia" class="comic-onomatopoeia comic-bark"
-                         aria-hidden="true">Woof!</div>
+                         aria-hidden="true">{% trans "Woof!" %}</div>
                 </div>
             </div>
         </section>
@@ -128,9 +132,9 @@
 
             <form id="chat-form" class="mx-auto flex w-full max-w-xl items-center gap-2"
                   autocomplete="off">
-                <label for="chat-input" class="sr-only">Message BarklAI</label>
+                <label for="chat-input" class="sr-only">{% trans "Message BarklAI" %}</label>
                 <input id="chat-input" name="message" type="text" required maxlength="2000"
-                       placeholder="Ask BarklAI anything about Andrea's career…"
+                       placeholder="{% trans "Ask BarklAI anything about Andrea's career…" %}"
                        class="min-w-0 flex-1 rounded-2xl border-2 border-slate-300 bg-white
                               px-4 py-3 text-sm text-slate-900 placeholder-slate-400 outline-none
                               transition focus:border-amber-500/70 focus:ring-2 focus:ring-amber-400/40
@@ -146,9 +150,18 @@
                                active:shadow-[2px_2px_0_0_#0f172a]
                                disabled:cursor-not-allowed disabled:opacity-40
                                disabled:active:translate-x-0 disabled:active:translate-y-0">
-                    Send 🐾
+                    {% trans "Send 🐾" %}
                 </button>
             </form>
+
+            {# GDPR: one-click erasure of this conversation + the privacy notice. #}
+            <p class="mx-auto mt-1.5 max-w-xl text-center text-[10px] text-slate-400">
+                <button type="button" id="delete-session"
+                        class="font-medium underline-offset-2 hover:text-slate-700 hover:underline">{% trans "Delete my conversation" %}</button>
+                ·
+                <a href="{% url 'chat:privacy' %}"
+                   class="font-medium underline-offset-2 hover:text-slate-700 hover:underline">{% trans "Privacy" %}</a>
+            </p>
         </footer>
     </div>
 
@@ -169,7 +182,7 @@
         {# Step 1 — opening line (fades in, holds, fades out). #}
         <div class="hero-step" data-hero-step="1">
             <h2 class="max-w-3xl text-3xl font-extrabold leading-tight text-slate-900 md:text-5xl">
-                Come closer so we can get to know each other...
+                {% trans "Come closer so we can get to know each other..." %}
             </h2>
         </div>
 
@@ -181,7 +194,7 @@
                            text-slate-900 shadow-[4px_4px_0_0_#0f172a] transition hover:bg-amber-300
                            active:translate-x-[2px] active:translate-y-[2px]
                            active:shadow-[2px_2px_0_0_#0f172a]">
-                <span>Scroll down to meet BarklAI</span>
+                <span>{% trans "Scroll down to meet BarklAI" %}</span>
                 <svg class="h-4 w-4 animate-bounce text-slate-900" fill="none" stroke="currentColor"
                      viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -192,7 +205,7 @@
 
         {# Step 3 — comic "Sniff sniff" onomatopoeia before the mascot enters. #}
         <div class="hero-step" data-hero-step="3">
-            <span class="comic-onomatopoeia comic-sniff">Sniff&nbsp;sniff</span>
+            <span class="comic-onomatopoeia comic-sniff">{% trans "Sniff sniff" %}</span>
         </div>
     </section>
 {% endblock %}
@@ -203,6 +216,9 @@
     {# the browser can cache it and never blocks HTML parsing. The Django       #}
     {# context reaches it through the data-session-id / data-media-url body     #}
     {# attributes.                                                              #}
+    {# JavaScript message catalog: defines the global gettext()/ngettext() used #}
+    {# by chat.js for its user-facing strings (djangojs domain).               #}
+    <script defer src="{% url 'javascript-catalog' %}"></script>
     <script defer src="{% static 'js/chat.js' %}"></script>
 {% endblock %}
 

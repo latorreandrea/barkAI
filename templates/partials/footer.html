@@ -1,12 +1,16 @@
+{% load i18n %}
 {% comment %}Micro-disclaimer footer anchored right below the chat composer.{% endcomment %}
 <footer class="shrink-0 border-t border-slate-200 bg-white/70 px-4 py-2 text-center text-[11px] leading-relaxed text-slate-500 backdrop-blur">
     <p>
-        BarkAI is powered by
+        {% trans "BarkAI is powered by" %}
         <span class="font-medium text-slate-600">Groq</span> &amp;
         <span class="font-medium text-slate-600">RAG</span> •
-        Built with
+        {% trans "Built with" %}
         <span class="font-medium text-slate-600">Django</span> &amp;
-        <span class="font-medium text-slate-600">Tailwind CSS</span> by
+        <span class="font-medium text-slate-600">Tailwind CSS</span> {% trans "by" %}
         <span class="font-medium text-amber-600">Andrea Latorre</span>
+        ·
+        <a href="{% url 'chat:privacy' %}"
+           class="font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline">{% trans "Privacy" %}</a>
     </p>
 </footer>

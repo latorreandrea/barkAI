@@ -1,5 +1,14 @@
 (function () {
     "use strict";
+
+    // Translators: gettext()/ngettext() are provided by Django's
+    // JavaScriptCatalog (served from /jsi18n/ and loaded before this file).
+    // The fallbacks keep the UI working if that catalog is ever missing.
+    var gettext = window.gettext || function (message) { return message; };
+    var ngettext = window.ngettext || function (singular, plural, count) {
+        return count === 1 ? singular : plural;
+    };
+
     // Session + onboarding keys persisted in localStorage.
     var STORAGE_KEY = "barkai.session_id";
     var VISITED_KEY = "barkai_visited";
@@ -66,12 +75,12 @@
     // 3) MASCOT STATE MACHINE: swaps the <video> src + status labels.  //
     // ================================================================ //
     var STATES = {
-        idle: "BarklAI is ready — ask me anything!",
-        sniffing: "BarklAI caught your scent — coming closer…",
-        searching: "BarklAI is searching repositories…",
-        typing: "BarklAI is typing…",
-        speaking: "BarklAI is speaking…",
-        celebrating: "BarklAI found an interview opportunity! 🎉"
+        idle: gettext("BarklAI is ready — ask me anything!"),
+        sniffing: gettext("BarklAI caught your scent — coming closer…"),
+        searching: gettext("BarklAI is searching repositories…"),
+        typing: gettext("BarklAI is typing…"),
+        speaking: gettext("BarklAI is speaking…"),
+        celebrating: gettext("BarklAI found an interview opportunity! 🎉")
     };
 
     function setMascotState(state) {
@@ -219,7 +228,7 @@
         var meta = document.createElement("div");
         meta.className = "mb-1 text-[10px] font-semibold uppercase tracking-wide " +
             (isUser ? "text-amber-900/80" : "text-amber-700");
-        meta.textContent = isUser ? "You" : "BarklAI 🐾";
+        meta.textContent = isUser ? gettext("You") : gettext("BarklAI 🐾");
 
         var text = document.createElement("p");
         text.className = "whitespace-pre-wrap";
@@ -277,8 +286,8 @@
     // ...and if a draft keeps sitting in the composer for a long while, a
     // friendlier nudge replaces the default one.
     var TYPING_STUCK_DELAY_MS = 300000;
-    var IDLE_HINT = "👇 Ask BarklAI your first question below!";
-    var TYPING_HINT = "🐾 Take your time! Or pick a shortcut to get started:";
+    var IDLE_HINT = gettext("👇 Ask BarklAI your first question below!");
+    var TYPING_HINT = gettext("🐾 Take your time! Or pick a shortcut to get started:");
 
     var idleTimer = null;
     var typingTimer = null;
@@ -353,16 +362,9 @@
     // 8) FIRST-VISIT ONBOARDING: hero lines -> sniffing -> woof ->      //
     //    two spoken intro messages (scripted, never persisted).        //
     // ================================================================ //
-    var ONBOARDING_MESSAGE_1 = "Woof! Wait... [sniff, sniff]... I smell clean code and " +
-        "new opportunities! Hi! I'm BarkAI. What brings you here? Are you looking for " +
-        "the right dev for your team?";
-    var ONBOARDING_MESSAGE_2 = "Perfect! Then you're in the right place. If you want to " +
-        "learn more about Andrea's work, his skills, or chat about his projects (or even " +
-        "figure out how he can help you solve a specific technical challenge), just tell " +
-        "me: I'm all ears!";
-    var REVISITOR_GREETING = "Woof! 👋 I'm BarklAI, Andrea's AI career companion. " +
-        "Ask me about his open-source projects, Python/Django experience, or RAG pipelines — " +
-        "or request an interview right here!";
+    var ONBOARDING_MESSAGE_1 = gettext("Woof! Wait... [sniff, sniff]... I smell clean code and new opportunities! Hi! I'm BarkAI. What brings you here? Are you looking for the right dev for your team?");
+    var ONBOARDING_MESSAGE_2 = gettext("Perfect! Then you're in the right place. If you want to learn more about Andrea's work, his skills, or chat about his projects (or even figure out how he can help you solve a specific technical challenge), just tell me: I'm all ears!");
+    var REVISITOR_GREETING = gettext("Woof! 👋 I'm BarklAI, Andrea's AI career companion. Ask me about his open-source projects, Python/Django experience, or RAG pipelines — or request an interview right here!");
 
     // Message 2 automatically follows message 1 after this pause.
     var SECOND_MESSAGE_DELAY_MS = 3000;
@@ -674,9 +676,9 @@
             await flushPromise.catch(function () { return null; });
             setMascotState("idle");
             await typeBubbleMessage(
-                "Woof… sorry, I could not reach my backend (" +
-                (err && err.message ? err.message : err) +
-                "). Please try again."
+                gettext("Woof… sorry, I could not reach my backend") +
+                " (" + (err && err.message ? err.message : err) + "). " +
+                gettext("Please try again.")
             );
         } finally {
             setBusy(false);
@@ -722,7 +724,8 @@
             showBubbleIdle();
             addMessageRow(
                 "assistant",
-                "Woof… I could not load the conversation history (" + err.message + ").",
+                gettext("Woof… I could not load the conversation history") +
+                " (" + err.message + ").",
                 false
             );
         }
@@ -783,7 +786,7 @@
             historyToggleEl.setAttribute("aria-expanded", expanded ? "true" : "false");
         }
         if (historyToggleLabelEl) {
-            historyToggleLabelEl.textContent = expanded ? "Live chat" : "History";
+            historyToggleLabelEl.textContent = expanded ? gettext("Live chat") : gettext("History");
         }
         if (historyToggleIconEl) {
             historyToggleIconEl.textContent = expanded ? "✕" : "⤢";
@@ -825,6 +828,33 @@
             el.addEventListener("wheel", forwardWheelToHistory, { passive: true });
         }
     });
+
+    // ================================================================ //
+    // 13) GDPR: erase this conversation on demand (right to erasure)   //
+    // ================================================================ //
+    var deleteSessionBtn = document.getElementById("delete-session");
+    if (deleteSessionBtn) {
+        deleteSessionBtn.addEventListener("click", async function () {
+            var question = gettext("Delete this conversation? This cannot be undone.");
+            if (!window.confirm(question)) {
+                return;
+            }
+            try {
+                await fetch("/session/delete/", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": getCookie("csrftoken")
+                    },
+                    body: JSON.stringify({ session_id: sessionId })
+                });
+            } catch (err) {
+                /* Network hiccup: still drop the local session below. */
+            }
+            localStorage.removeItem(STORAGE_KEY);
+            window.location.reload();
+        });
+    }
 
     formEl.addEventListener("submit", function (event) {
         event.preventDefault();
