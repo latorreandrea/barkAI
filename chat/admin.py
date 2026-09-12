@@ -1,7 +1,7 @@
 """Admin registrations for the chat application."""
 from django.contrib import admin
 
-from .models import ChatMessage, ChatSession
+from .models import ChatMessage, ChatSession, KnowledgeDocument
 
 
 @admin.register(ChatSession)
@@ -29,3 +29,16 @@ class ChatMessageAdmin(admin.ModelAdmin):
     def preview(self, obj: ChatMessage) -> str:
         """Show the first 80 characters of a message in the list view."""
         return obj.content[:80]
+
+
+@admin.register(KnowledgeDocument)
+class KnowledgeDocumentAdmin(admin.ModelAdmin):
+    list_display = ("source", "kind", "title", "characters", "fetched_at")
+    list_filter = ("kind", "fetched_at")
+    search_fields = ("source", "title", "content")
+    readonly_fields = ("content_hash", "fetched_at")
+
+    @admin.display(description="Chars")
+    def characters(self, obj: KnowledgeDocument) -> int:
+        """Show how large the stored document is, in characters."""
+        return len(obj.content)

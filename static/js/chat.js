@@ -283,10 +283,14 @@
     var idleTimer = null;
     var typingTimer = null;
 
-    // Reveal the chips inside the bubble, as if BarklAI just said them.
-    function showIdleSuggestions(message) {
+    // Reveal the quick-question chips inside the bubble.
+    // `hint` is an optional line BarklAI "says" above the chips (the idle
+    // nudge); when it is omitted the live reply stays visible above them.
+    function showIdleSuggestions(hint) {
+        var hintText = (hint || "").trim();
         if (idleSuggestionsTextEl) {
-            idleSuggestionsTextEl.textContent = message || IDLE_HINT;
+            idleSuggestionsTextEl.textContent = hintText;
+            idleSuggestionsTextEl.hidden = hintText === "";
         }
         if (idleSuggestionsEl) {
             idleSuggestionsEl.hidden = false;
@@ -294,6 +298,7 @@
         if (bubbleScrollEl) {
             // Grow the bubble so every chip is visible, and rewind to the top.
             bubbleScrollEl.classList.add("is-suggesting");
+            bubbleScrollEl.classList.toggle("is-hinting", hintText !== "");
             bubbleScrollEl.scrollTop = 0;
         }
     }
@@ -303,7 +308,7 @@
             idleSuggestionsEl.hidden = true;
         }
         if (bubbleScrollEl) {
-            bubbleScrollEl.classList.remove("is-suggesting");
+            bubbleScrollEl.classList.remove("is-suggesting", "is-hinting");
         }
     }
 
@@ -661,6 +666,10 @@
             await flushPromise; // Never type the new reply over the old bubble copy.
             setMascotState(data.interview_requested ? "celebrating" : "speaking");
             await typeBubbleMessage(data.reply);
+            // The agent decided the recruiter is unsure: offer quick questions.
+            if (data.suggest_questions) {
+                showIdleSuggestions(null);
+            }
         } catch (err) {
             await flushPromise.catch(function () { return null; });
             setMascotState("idle");

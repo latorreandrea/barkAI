@@ -57,3 +57,44 @@ class ChatMessage(models.Model):
 
     def __str__(self) -> str:
         return f"{self.get_sender_display()}: {self.content[:60]}"
+
+
+class KnowledgeDocument(models.Model):
+    """One piece of BarklAI's ground truth (career profile or a GitHub README).
+
+    Populated by ``python manage.py sync_knowledge``. ``content_hash`` makes the
+    sync idempotent (only changed documents are rewritten) and is the natural
+    anchor for a future embeddings field once the RAG layer lands.
+    """
+
+    class Kind(models.TextChoices):
+        PROFILE = "profile", "Career profile"
+        GITHUB_README = "github_readme", "GitHub README"
+
+    class Meta:
+        ordering = ["kind", "source"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["kind", "source"], name="uniq_knowledge_kind_source"
+            ),
+        ]
+
+    kind = models.CharField(
+        "Kind", max_length=32, choices=Kind.choices, default=Kind.PROFILE
+    )
+    source = models.CharField(
+        "Source",
+        max_length=200,
+        help_text="owner/repo for READMEs, 'profile' for the local career profile.",
+    )
+    title = models.CharField("Title", max_length=200, blank=True)
+    url = models.URLField("URL", blank=True)
+    default_branch = models.CharField("Default branch", max_length=100, blank=True)
+    content = models.TextField("Content")
+    content_hash = models.CharField(
+        "Content hash", max_length=64, blank=True, db_index=True
+    )
+    fetched_at = models.DateTimeField("Last fetched", auto_now=True)
+
+    def __str__(self) -> str:
+        return f"{self.get_kind_display()}: {self.source}"

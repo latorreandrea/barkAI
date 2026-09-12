@@ -176,8 +176,10 @@
 /* after a spell of inactivity. The bubble grows to fit the chips, and */
 /* the live message is hidden while they are showing.                  */
 /* ------------------------------------------------------------------ */
-#speech-bubble-scroll.is-suggesting { max-height: 10rem; }
-#speech-bubble-scroll.is-suggesting #speech-bubble-text { display: none; }
+#speech-bubble-scroll.is-suggesting { max-height: 14rem; }
+/* Idle-nudge mode replaces the live text with the hint line; when the chips
+   accompany a real reply (is-suggesting only) the text stays visible above. */
+#speech-bubble-scroll.is-hinting #speech-bubble-text { display: none; }
 
 #idle-suggestions { animation: nudgeIn .45s ease both; }
 @keyframes nudgeIn {

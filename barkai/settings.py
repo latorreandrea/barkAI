@@ -30,6 +30,31 @@ def env_csv(name: str, default: str = "") -> list[str]:
     return [item.strip() for item in os.getenv(name, default).split(",") if item.strip()]
 
 
+def env_str(name: str, default: str = "") -> str:
+    """Read an environment variable, treating a blank value as unset.
+
+    A key that is present but empty (e.g. ``GROQ_MODEL=`` in .env) must not
+    override the default, otherwise the app would run with an empty model id.
+    """
+    return os.getenv(name, "").strip() or default
+
+
+def env_int(name: str, default: int) -> int:
+    """Read an integer environment variable, falling back on blank/invalid."""
+    try:
+        return int(env_str(name, str(default)))
+    except ValueError:
+        return default
+
+
+def env_float(name: str, default: float) -> float:
+    """Read a float environment variable, falling back on blank/invalid."""
+    try:
+        return float(env_str(name, str(default)))
+    except ValueError:
+        return default
+
+
 # --- Core Django ----------------------------------------------------------
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-dev-only-key-change-me")
@@ -148,5 +173,22 @@ CORS_ALLOW_ALL_ORIGINS = DEBUG and not CORS_ALLOWED_ORIGINS
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- barkAI application settings ------------------------------------------
-# Groq key for the future real agent. Empty -> chat/services mock is used.
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+# LLM agent (Groq). An empty GROQ_API_KEY keeps the offline mock in
+# chat/services.py, so local dev and the test suite need no network or secret.
+GROQ_API_KEY = env_str("GROQ_API_KEY", "")
+GROQ_MODEL = env_str("GROQ_MODEL", "qwen/qwen3.8-27b")
+GROQ_TIMEOUT_SECONDS = env_float("GROQ_TIMEOUT_SECONDS", 20.0)
+GROQ_MAX_TOKENS = env_int("GROQ_MAX_TOKENS", 512)
+GROQ_TEMPERATURE = env_float("GROQ_TEMPERATURE", 0.5)
+# How many previous turns are handed to the model as conversation context.
+AGENT_HISTORY_LIMIT = env_int("AGENT_HISTORY_LIMIT", 20)
+# How much knowledge-base text is injected into the system prompt.
+AGENT_KNOWLEDGE_MAX_CHARS = env_int("AGENT_KNOWLEDGE_MAX_CHARS", 12000)
+
+# Knowledge ingestion from GitHub (see `python manage.py sync_knowledge`).
+GITHUB_USERNAME = env_str("GITHUB_USERNAME", "")
+GITHUB_EXTRA_REPOS = env_csv("GITHUB_EXTRA_REPOS")
+GITHUB_TOKEN = env_str("GITHUB_TOKEN", "")
+GITHUB_INCLUDE_FORKS = env_bool("GITHUB_INCLUDE_FORKS", default="False")
+GITHUB_API_TIMEOUT_SECONDS = env_float("GITHUB_API_TIMEOUT_SECONDS", 15.0)
+GITHUB_README_MAX_CHARS = env_int("GITHUB_README_MAX_CHARS", 8000)

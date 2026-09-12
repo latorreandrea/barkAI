@@ -58,23 +58,35 @@ def send_message(request, payload: SendIn) -> BarkleyOut:
         session.company_name = payload.company_name
 
     # 1) Persist the user's message.
-    ChatMessage.objects.create(
+    user_message = ChatMessage.objects.create(
         session=session,
         sender=ChatMessage.Sender.USER,
         content=payload.message.strip(),
     )
 
-    # 2) Ask the (mock) service layer for Barkley's reply.
-    result = generate_reply(payload.message)
+    # 2) Hand the model the previous turns (chronological, excluding the one we
+    #    just stored) so BarklAI keeps the conversation context.
+    history = [
+        {
+            "role": "assistant"
+            if message.sender == ChatMessage.Sender.ASSISTANT
+            else "user",
+            "content": message.content,
+        }
+        for message in session.messages.exclude(pk=user_message.pk)
+    ]
 
-    # 3) Persist Barkley's reply.
+    # 3) Ask the agent service for Barkley's reply.
+    result = generate_reply(payload.message, history)
+
+    # 4) Persist Barkley's reply.
     ChatMessage.objects.create(
         session=session,
         sender=ChatMessage.Sender.ASSISTANT,
         content=result.reply,
     )
 
-    # 4) Flag the session when an interview was requested; bump last_active.
+    # 5) Flag the session when an interview was requested; bump last_active.
     if result.interview_requested:
         session.interview_requested = True
     session.save()
@@ -84,4 +96,5 @@ def send_message(request, payload: SendIn) -> BarkleyOut:
         reply=result.reply,
         barkley_state=result.barkley_state,
         interview_requested=session.interview_requested,
+        suggest_questions=result.suggest_questions,
     )

@@ -39,3 +39,6 @@ class BarkleyOut(Schema):
     reply: str
     barkley_state: str  # e.g. "speaking", "celebrating", "searching", "typing"
     interview_requested: bool
+    # True when the agent thinks the recruiter is unsure what to ask, so the UI
+    # can offer the quick-question chips inside the speech bubble.
+    suggest_questions: bool = False
