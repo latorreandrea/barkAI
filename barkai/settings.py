@@ -11,12 +11,17 @@ Configuration philosophy
   development; production MUST export DEBUG=False explicitly.
 * Static assets live in a project-wide "static/" folder so Barkley's reaction
   MP4s under static/mascot/ are served by runserver while DEBUG is enabled.
+* The database comes from a single connection string, DATABASE_URL. While DEBUG
+  is on, a missing URL means zero-config SQLite (enough for a quick look and for
+  the test suite); with DEBUG off the app refuses to boot instead of connecting
+  with guessed credentials.
 """
 
 import os
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlparse
 
+from django.core.exceptions import ImproperlyConfigured
 from django.utils.translation import gettext_lazy as _
 
 # Build paths inside the project like this: BASE_DIR / "subdir".
@@ -123,9 +128,12 @@ TEMPLATES = [
 WSGI_APPLICATION = "barkai.wsgi.application"
 
 # --- Database -------------------------------------------------------------
-# Priority: DATABASE_URL (one connection string, e.g. Neon/Supabase — required
-# for pgvector, which needs PostgreSQL) > zero-config SQLite while DEBUG > the
-# explicit DB_* variables in production.
+# A single supported way to configure the database: DATABASE_URL (PostgreSQL +
+# pgvector, e.g. Neon/Supabase). No URL while DEBUG is on falls back to a
+# zero-config SQLite file — handy for a quick look and for the test suite, but
+# it has no pgvector, so retrieval uses the Python cosine fallback. With DEBUG
+# off there is deliberately no fallback (see below): refusing to boot beats
+# silently connecting with guessed credentials.
 def database_from_url(url: str) -> dict:
     """Turn a ``postgres://`` connection string into a Django DATABASES entry."""
     parsed = urlparse(url)
@@ -157,16 +165,11 @@ elif DEBUG:
         }
     }
 else:
-    DATABASES = {
-        "default": {
-            "ENGINE": os.getenv("DB_ENGINE", "django.db.backends.postgresql"),
-            "NAME": os.getenv("DB_NAME", "barkai"),
-            "USER": os.getenv("DB_USER", "barkai"),
-            "PASSWORD": os.getenv("DB_PASSWORD", ""),
-            "HOST": os.getenv("DB_HOST", "127.0.0.1"),
-            "PORT": os.getenv("DB_PORT", "5432"),
-        }
-    }
+    raise ImproperlyConfigured(
+        "No database configured: export DATABASE_URL (PostgreSQL + pgvector) "
+        "before running with DEBUG=False. There is no implicit production "
+        "fallback."
+    )
 
 # --- Password validation --------------------------------------------------
 AUTH_PASSWORD_VALIDATORS = [

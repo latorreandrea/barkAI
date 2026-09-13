@@ -288,7 +288,7 @@ The repository is a Django project with a thin surface: `barkai/` holds the sett
 
 - **Backend:** Django 5.2 · Django Ninja 1.7 · django-cors-headers · Pydantic 2
 - **Language:** Python 3.11+
-- **Database:** PostgreSQL + **pgvector** via a single `DATABASE_URL` (Neon in dev and prod). Without that variable the app falls back to zero-config SQLite — handy for a quick look, but no vector search.
+- **Database:** PostgreSQL + **pgvector** via a single `DATABASE_URL` (Neon in dev and prod) — the only supported database configuration. With `DEBUG=True` and no URL the app falls back to zero-config SQLite (handy for a quick look, but no vector search); with `DEBUG=False` it refuses to boot rather than guessing credentials.
 - **Frontend:** Django Templates + Tailwind CSS (compiled with the Tailwind CLI into one minified `barkai.css`; no runtime CDN)
 - **i18n:** Django locales (`locale/da/…`) + `LocaleMiddleware` + `JavaScriptCatalog`, compiled by `scripts/compile_messages.py` (pure Python, no gettext required)
 - **Mascot media:** MP4 reaction clips in `static/mascot/`
@@ -389,7 +389,7 @@ but **blank** falls back to its default, so you only set what you need.
 | `GITHUB_INCLUDE_FORKS` | Ingest forks too (default `false`). | your choice |
 | `GITHUB_API_TIMEOUT_SECONDS` | GitHub API timeout (default `15`). | your choice |
 | `GITHUB_README_MAX_CHARS` | Max characters stored per README (default `14000`). | your choice |
-| `DATABASE_URL` | PostgreSQL connection string (Neon/Supabase). Needed for pgvector; blank → SQLite. | your database provider |
+| `DATABASE_URL` | PostgreSQL connection string (Neon/Supabase) — **the only supported database configuration**. Required for pgvector; with `DEBUG=True` a missing URL falls back to SQLite, with `DEBUG=False` the app raises `ImproperlyConfigured` instead of starting. | your database provider |
 | `EMBEDDING_PROVIDER` | Embeddings backend: `cloudflare` or `none` (default). | your choice |
 | `EMBEDDING_MODEL` | Embedding model id (default `@cf/baai/bge-m3`). | Cloudflare model catalogue |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account id for Workers AI. | Cloudflare dashboard → Workers AI → *Use REST API* |
@@ -421,7 +421,7 @@ but **blank** falls back to its default, so you only set what you need.
 
 > The compiled `static/css/barkai.css` is committed, so a fresh clone runs without Node.js. Only run the build below when you add/change Tailwind classes or the site-wide custom CSS.
 
-> `DEBUG` defaults to `True` when unset. For production always export `DEBUG=False`, a strong `SECRET_KEY` and either `DATABASE_URL` or the `DB_*` credentials.
+> `DEBUG` defaults to `True` when unset. For production always export `DEBUG=False`, a strong `SECRET_KEY` and `DATABASE_URL` (the only supported database configuration — the app refuses to boot without it when `DEBUG=False`).
 
 ---
 
@@ -509,6 +509,7 @@ tailwind.config.js       # content globs + theme (fonts, brand palette)
 ### Conventions
 
 - **Environment-driven settings** — read via `os.getenv()`; python-dotenv is intentionally not used. Export variables before running: `set -a; source .env; set +a`.
+- **One database configuration** — a single `DATABASE_URL` (there is no `DB_*` fallback). SQLite is only a `DEBUG` convenience for a quick look: it has no pgvector, so retrieval drops to the Python cosine scan and an empty `db.sqlite3` looks like a broken index. With `DEBUG=False` a missing URL raises `ImproperlyConfigured` at boot instead of connecting with guessed credentials.
 - **Apps own their pieces** — `chat/` ships its own `urls.py`, views, templates and API package; project-level `templates/` only covers the shared shell (`base.html`), the error pages and the toast includes.
 - **Service seam** — `chat/services.py` owns the agent: it calls Groq (JSON mode) when `GROQ_API_KEY` is set and otherwise returns consistent, in-character fallbacks. The persona + output contract live in `chat/prompts.py`, and the facts come from `KnowledgeDocument`.
 - **Structured output** — the model is asked for `{reply, interview_requested, suggest_questions}`; parsing is tolerant, so a malformed answer still yields a usable reply.
@@ -572,7 +573,7 @@ python manage.py test chat.tests.RagVectorTests --keepdb   # runs against Neon
 > Hosting and CI/CD are to be defined. The production checklist currently supported by the codebase:
 
 * Export `DEBUG=False` and a strong `SECRET_KEY`.
-* Point `DATABASE_URL` at a **PostgreSQL + pgvector** instance (Neon/Supabase free tiers work); `migrate` creates the `vector` extension automatically.
+* Point `DATABASE_URL` at a **PostgreSQL + pgvector** instance (Neon/Supabase free tiers work); `migrate` creates the `vector` extension automatically. It is mandatory: with `DEBUG=False` the app refuses to boot without it.
 * Export `GROQ_API_KEY`, `EMBEDDING_PROVIDER=cloudflare` with `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`, `RAG_ENABLED=True`, `GITHUB_USERNAME` (and `GITHUB_TOKEN` for private repos).
 * Pin `ALLOWED_HOSTS` and `CORS_ALLOWED_ORIGINS`.
 * Run `python manage.py migrate && python manage.py collectstatic --noinput` and serve `staticfiles/` (WhiteNoise or a CDN).
