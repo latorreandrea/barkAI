@@ -7,10 +7,15 @@ Sources:
     ``owner/repo`` slugs or full GitHub URLs — handy for projects that live
     under a different GitHub account)
 
+Repositories listed in ``GITHUB_EXCLUDE_REPOS`` are skipped (template or
+boilerplate READMEs, abandoned projects…). Add ``--prune`` to also delete the
+documents that are no longer among the sources.
+
 Run it whenever the sources change:
 
     python manage.py sync_knowledge
     python manage.py sync_knowledge --profile-only
+    python manage.py sync_knowledge --prune      # + drop stale documents
 
 The sync is idempotent: unchanged documents are skipped (content hash).
 """
@@ -47,6 +52,30 @@ def normalize_repo(entry: str) -> str | None:
     return None
 
 
+def exclusion_keys(entries: list[str] | None) -> set[str]:
+    """Normalise ``GITHUB_EXCLUDE_REPOS`` entries into comparable keys.
+
+    Accepts ``owner/repo``, a full GitHub URL, or simply the bare repository
+    name — so listing ``my-template`` is enough to exclude
+    ``someone/my-template``.
+    """
+    keys = set()
+    for entry in entries or []:
+        text = (entry or "").strip()
+        if not text:
+            continue
+        keys.add((normalize_repo(text) or text.rstrip("/")).lower())
+    return keys
+
+
+def is_excluded(full_name: str, keys: set[str]) -> bool:
+    """True when ``owner/repo`` (or just its name) is in the exclusion set."""
+    name = (full_name or "").strip().lower()
+    if not name:
+        return False
+    return name in keys or name.split("/")[-1] in keys
+
+
 class Command(BaseCommand):
     help = "Sync BarklAI's knowledge base (career profile + GitHub READMEs)."
 
@@ -56,18 +85,24 @@ class Command(BaseCommand):
             action="store_true",
             help="Only (re)load the local career profile; skip GitHub.",
         )
+        parser.add_argument(
+            "--prune",
+            action="store_true",
+            help="Delete README documents that are no longer among the sources "
+            "(e.g. a repo added to GITHUB_EXCLUDE_REPOS).",
+        )
 
     def handle(self, *args, **options):
         tally = {"created": 0, "updated": 0, "unchanged": 0}
         self._tally(self._sync_profile(), tally)
 
         if not options["profile_only"]:
-            self._sync_github(tally)
+            self._sync_github(tally, prune=options["prune"])
 
         self._report(tally)
 
     # -- GitHub ----------------------------------------------------------
-    def _sync_github(self, tally: dict) -> None:
+    def _sync_github(self, tally: dict, prune: bool = False) -> None:
         username = settings.GITHUB_USERNAME
         extra = settings.GITHUB_EXTRA_REPOS
         if not username and not extra:
@@ -83,8 +118,11 @@ class Command(BaseCommand):
                 timeout=settings.GITHUB_API_TIMEOUT_SECONDS,
                 follow_redirects=True,
             ) as client:
-                for full_name in self._collect_repos(username, extra, client):
+                full_names = self._collect_repos(username, extra, client)
+                for full_name in full_names:
                     self._tally(self._sync_readme(full_name, client), tally)
+                if prune:
+                    self._prune_github(full_names)
         except httpx.HTTPError as exc:
             self.stderr.write(self.style.ERROR(f"GitHub request failed: {exc}"))
             raise SystemExit(1)
@@ -99,18 +137,28 @@ class Command(BaseCommand):
         return headers
 
     def _collect_repos(self, username: str, extra: list[str], client) -> list[str]:
+        excluded = exclusion_keys(settings.GITHUB_EXCLUDE_REPOS)
         repos = []
         if username:
             for repo in self._list_user_repos(username, client):
                 if repo.get("fork") and not settings.GITHUB_INCLUDE_FORKS:
                     continue
-                repos.append(repo["full_name"])
+                full_name = repo["full_name"]
+                if is_excluded(full_name, excluded):
+                    self.stdout.write(
+                        f"  - {full_name}: excluded (GITHUB_EXCLUDE_REPOS)"
+                    )
+                    continue
+                repos.append(full_name)
         for entry in extra:
             full_name = normalize_repo(entry)
             if not full_name:
                 self.stderr.write(
                     self.style.WARNING(f"  ! skipped invalid repo: {entry!r}")
                 )
+                continue
+            if is_excluded(full_name, excluded):
+                self.stdout.write(f"  - {full_name}: excluded (GITHUB_EXCLUDE_REPOS)")
                 continue
             repos.append(full_name)
         return list(dict.fromkeys(repos))  # de-duplicate, keep order
@@ -147,6 +195,24 @@ class Command(BaseCommand):
             title=data.get("name") or f"{full_name} README",
             url=data.get("html_url", ""),
             content=content[: settings.GITHUB_README_MAX_CHARS],
+        )
+
+    def _prune_github(self, keep: list[str]) -> None:
+        """Delete README documents (and their chunks) that are no longer sourced."""
+        stale = list(
+            KnowledgeDocument.objects.filter(
+                kind=KnowledgeDocument.Kind.GITHUB_README
+            ).exclude(source__in=keep)
+        )
+        if not stale:
+            return
+        chunks = sum(document.chunks.count() for document in stale)
+        for document in stale:
+            document.delete()
+        self.stdout.write(
+            self.style.WARNING(
+                f"  - pruned {len(stale)} stale document(s), {chunks} chunk(s)"
+            )
         )
 
     # -- Local profile ---------------------------------------------------

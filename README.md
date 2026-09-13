@@ -119,15 +119,15 @@ Danish question retrieve English project READMEs.
 1. **Persistent, login-free sessions** — every conversation is identified by a UUID (`ChatSession.session_id`), so returning recruiters are recognized across days without friction or login walls.
 2. **Django Ninja REST API** — `GET /api/chat/history/{session_id}` restores a conversation and `POST /api/chat/send` persists both turns and returns BarklAI's reply.
 3. **Live LLM agent (Groq)** — `chat/services.py` asks Groq (`qwen/qwen3.8-27b`) in **JSON mode** for a structured reply (`reply`, `interview_requested`, `suggest_questions`), grounded in the knowledge base and the previous conversation turns. An empty `GROQ_API_KEY`, or any network hiccup, falls back to consistent, in-character messages (no stack traces for the recruiter).
-4. **Knowledge base** — `KnowledgeDocument` stores the curated career profile plus the README of every configured GitHub repository, synced **idempotently** (content hash) by `python manage.py sync_knowledge`.
+4. **Knowledge base** — `KnowledgeDocument` stores the curated career profile plus the README of every configured GitHub repository, synced **idempotently** (content hash) by `python manage.py sync_knowledge`. Repositories listed in `GITHUB_EXCLUDE_REPOS` are skipped, and `--prune` deletes whatever is no longer sourced.
 5. **Interview-intent detection** — decided by the agent (`interview_requested`); the session is flagged and BarklAI switches to the `celebrating` clip.
 6. **On-demand question suggestions** — when the recruiter seems unsure (`suggest_questions`) or after a spell of inactivity, the UI offers quick-question chips inside the speech bubble.
 7. **Interactive Web UI** — responsive single-page chat (compact sticky header on mobile; mascot panel + chat column on desktop) styled with a single **compiled, minified Tailwind stylesheet** (`static/css/barkai.css`) and **external deferred JS** — no runtime CDN, no inline `<style>`/`<script>`, so browsers cache the assets across pages.
 8. **BarklAI reaction clips** — `idle`, `sniffing`, `searching`, `typing`, `speaking` and `celebrating` MP4s under `static/mascot/` drive the mascot animation, with an emoji fallback when a clip is missing.
 9. **Custom error pages** — project-level `403`, `404` and `500` templates.
 10. **Environment-driven settings** — values read from the environment only (python-dotenv is intentionally not used); blank values fall back to safe defaults, and `DEBUG` defaults to `True` for a frictionless local start.
-11. **Automated tests** — index view, chat REST API, the agent service (Groq mocked, no network), the knowledge sync + indexing commands, the i18n switching and the GDPR surface (34 tests; the pgvector round-trip runs only on PostgreSQL).
-12. **Retrieval-augmented answers (RAG)** — the knowledge base is chunked and embedded (`KnowledgeChunk` + **pgvector**). With `RAG_ENABLED=True` only the most relevant chunks (native `<=>` cosine distance on PostgreSQL) are sent to the model; otherwise the whole corpus is stuffed into the prompt as a fallback.
+11. **Automated tests** — index view, chat REST API, the agent service (Groq mocked, no network), the knowledge sync + indexing commands, the i18n switching and the GDPR surface (41 tests; the pgvector round-trip runs only on PostgreSQL).
+12. **Retrieval-augmented answers (RAG)** — the knowledge base is chunked and embedded (`KnowledgeChunk` + **pgvector**). With `RAG_ENABLED=True` only the most relevant chunks (native `<=>` cosine distance on PostgreSQL) are sent to the model; the curated **career profile is always injected verbatim** and kept out of the similarity search (see below), so it cannot crowd the project chunks out of the prompt. Without RAG the whole corpus is stuffed into the prompt as a fallback.
 13. **Bilingual UI (EN/DA)** — Django i18n (`{% trans %}` + `JavaScriptCatalog`) with `Accept-Language` detection and a navbar toggle; the agent answers in the recruiter's language.
 14. **GDPR-ready** — a plain-language privacy notice (EN/DA), one-click **erasure** of the conversation (`POST /session/delete/`), a retention job (`purge_old_sessions`) and processor documentation in `docs/privacy.md`.
 
@@ -179,13 +179,17 @@ GitHub READMEs ┘ ────────▶ build_index  ──▶ KnowledgeC
                                            (+ embedding)      (pgvector `<=>`)
 ```
 
-1. `sync_knowledge` stores each source as a `KnowledgeDocument` (curated profile + every README).
+1. `sync_knowledge` stores each source as a `KnowledgeDocument` (curated profile + every README,
+   minus `GITHUB_EXCLUDE_REPOS`; `--prune` removes the documents that are no longer sourced).
 2. `build_index` splits them into **paragraph-aware chunks** and embeds only the new/changed ones
    (content hash) with the configured provider, storing 1024-dim vectors in `KnowledgeChunk` (pgvector).
 3. At query time `chat/rag.py` embeds the question and retrieves the closest chunks
    (`CosineDistance` on PostgreSQL; a Python cosine fallback on other backends), which are injected
    into the system prompt.
-4. `RAG_ENABLED=False` — or a missing embedding provider — gracefully falls back to stuffing the
+4. The **career profile is always injected verbatim** and is deliberately **excluded from the
+   similarity search**: it is short, it applies to every question, and it used to match even the
+   vaguest query — stealing the top slots from the project chunks.
+5. `RAG_ENABLED=False` — or a missing embedding provider — gracefully falls back to stuffing the
    whole corpus into the prompt, so the agent never breaks.
 
 Both indexing steps can run **from your laptop against the production database**: they only need the
@@ -212,7 +216,7 @@ set -a; source .env; set +a
 python manage.py migrate
 
 # 5. Load BarklAI's knowledge base (career profile + GitHub READMEs)
-python manage.py sync_knowledge
+python manage.py sync_knowledge --prune   # --prune also drops stale documents
 
 # 6. Chunk + embed it (needs EMBEDDING_PROVIDER=cloudflare)
 python manage.py build_index
@@ -243,9 +247,10 @@ but **blank** falls back to its default, so you only set what you need.
 | `GITHUB_USERNAME` | GitHub user whose repositories' READMEs are ingested. | `github.com/<username>` |
 | `GITHUB_EXTRA_REPOS` | Extra repos under **other** accounts: comma-separated `owner/repo` (a full GitHub URL works too). | those repos' URLs |
 | `GITHUB_TOKEN` | *(optional)* PAT for private repos / higher rate limits. | GitHub → *Settings → Developer settings → Personal access tokens* |
+| `GITHUB_EXCLUDE_REPOS` | Repos to keep **out** of the knowledge base (template/boilerplate READMEs, abandoned projects): comma-separated `owner/repo`, a full GitHub URL, or just the bare repo name. | your choice |
 | `GITHUB_INCLUDE_FORKS` | Ingest forks too (default `false`). | your choice |
 | `GITHUB_API_TIMEOUT_SECONDS` | GitHub API timeout (default `15`). | your choice |
-| `GITHUB_README_MAX_CHARS` | Max characters stored per README (default `8000`). | your choice |
+| `GITHUB_README_MAX_CHARS` | Max characters stored per README (default `14000`). | your choice |
 | `DATABASE_URL` | PostgreSQL connection string (Neon/Supabase). Needed for pgvector; blank → SQLite. | your database provider |
 | `EMBEDDING_PROVIDER` | Embeddings backend: `cloudflare` or `none` (default). | your choice |
 | `EMBEDDING_MODEL` | Embedding model id (default `@cf/baai/bge-m3`). | Cloudflare model catalogue |
@@ -255,7 +260,8 @@ but **blank** falls back to its default, so you only set what you need.
 | `EMBEDDING_BATCH_SIZE` | Texts per embedding request (default `32`). | your choice |
 | `RAG_ENABLED` | Use retrieval instead of stuffing the whole corpus (default `false`). | your choice |
 | `RAG_TOP_K` | Chunks injected into the prompt (default `5`). | your choice |
-| `RAG_MIN_SCORE` | Minimum cosine similarity (default `0.25`). | your choice |
+| `RAG_MAX_PER_SOURCE` | Max chunks per document in one prompt (default `2`), so a long generic README cannot fill every slot. | your choice |
+| `RAG_MIN_SCORE` | Minimum cosine similarity for a retrieved chunk (default `0.35`; the profile is excluded from the search and always injected instead). | your choice |
 | `RAG_CHUNK_MAX_CHARS` | Max characters per chunk while indexing (default `1200`). | your choice |
 | `SESSION_RETENTION_DAYS` | Conversation retention window (default `90`). | your choice |
 | `PRIVACY_CONTACT_EMAIL` | Address shown in the privacy notice. | your choice |
@@ -368,6 +374,7 @@ npm run css:build    # after adding/changing Tailwind classes or site-wide CSS
 python manage.py check              # sanity check
 python manage.py migrate            # apply migrations (creates the pgvector extension)
 python manage.py sync_knowledge     # (re)load the profile + GitHub READMEs into the DB
+python manage.py sync_knowledge --prune  # + delete the documents no longer sourced
 python manage.py build_index        # chunk + embed the knowledge base (RAG index)
 python manage.py purge_old_sessions # delete conversations past SESSION_RETENTION_DAYS
 python scripts/compile_messages.py  # rebuild the .mo translation catalogues
@@ -384,7 +391,7 @@ npm run css:build                   # rebuild static/css/barkai.css after templa
 python manage.py test
 ```
 
-The suite (`chat/tests.py`, **34 tests**) covers: the index view; the history endpoint; `send` persisting both turns; the interview flag; the agent service with the **Groq client mocked** (JSON parsing, friendly fallbacks, offline interview heuristic) so no network or key is required; the knowledge commands (`sync_knowledge`, `build_index` chunking + hash idempotency, `purge_old_sessions`); the i18n switching (browser detection, session toggle, JS catalogue); the GDPR surface (privacy notice, erasure endpoint); and the `403`/`404`/`500` pages.
+The suite (`chat/tests.py`, **41 tests**) covers: the index view; the history endpoint; `send` persisting both turns; the interview flag; the agent service with the **Groq client mocked** (JSON parsing, friendly fallbacks, offline interview heuristic) so no network or key is required; the knowledge commands (`sync_knowledge` incl. the `GITHUB_EXCLUDE_REPOS` filter and `--prune`, `build_index` chunking + hash idempotency, `purge_old_sessions`); retrieval (profile always injected, profile never searched, per-source diversity cap); the i18n switching (browser detection, session toggle, JS catalogue); the GDPR surface (privacy notice, erasure endpoint); and the `403`/`404`/`500` pages.
 
 Tests run against **SQLite** by default — fast, offline, no database server needed. The single **pgvector** round-trip test is skipped there and runs on PostgreSQL:
 

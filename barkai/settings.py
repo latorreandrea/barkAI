@@ -238,7 +238,12 @@ CLOUDFLARE_API_TOKEN = env_str("CLOUDFLARE_API_TOKEN", "")
 # Retrieval knobs.
 RAG_ENABLED = env_bool("RAG_ENABLED", default="False")
 RAG_TOP_K = env_int("RAG_TOP_K", 5)
-RAG_MIN_SCORE = env_float("RAG_MIN_SCORE", 0.25)
+# Max chunks a single document may contribute to one prompt. Without it a long,
+# generic README (this project's own, say) can fill every slot.
+RAG_MAX_PER_SOURCE = env_int("RAG_MAX_PER_SOURCE", 2)
+# Minimum cosine similarity for a chunk to reach the prompt. Tuned for
+# @cf/baai/bge-m3: below ~0.35 generic matches start leaking in.
+RAG_MIN_SCORE = env_float("RAG_MIN_SCORE", 0.35)
 # Chunks longer than this many characters are split during indexing.
 RAG_CHUNK_MAX_CHARS = env_int("RAG_CHUNK_MAX_CHARS", 1200)
 
@@ -252,7 +257,11 @@ PRIVACY_CONTACT_EMAIL = env_str("PRIVACY_CONTACT_EMAIL", "latorre.andrea.93@gmai
 # Knowledge ingestion from GitHub (see `python manage.py sync_knowledge`).
 GITHUB_USERNAME = env_str("GITHUB_USERNAME", "")
 GITHUB_EXTRA_REPOS = env_csv("GITHUB_EXTRA_REPOS")
+# Repositories to keep OUT of the knowledge base (template/boilerplate READMEs,
+# abandoned projects…). Accepts `owner/repo`, a full GitHub URL, or just the bare
+# repository name (matched case-insensitively).
+GITHUB_EXCLUDE_REPOS = env_csv("GITHUB_EXCLUDE_REPOS")
 GITHUB_TOKEN = env_str("GITHUB_TOKEN", "")
 GITHUB_INCLUDE_FORKS = env_bool("GITHUB_INCLUDE_FORKS", default="False")
 GITHUB_API_TIMEOUT_SECONDS = env_float("GITHUB_API_TIMEOUT_SECONDS", 15.0)
-GITHUB_README_MAX_CHARS = env_int("GITHUB_README_MAX_CHARS", 8000)
+GITHUB_README_MAX_CHARS = env_int("GITHUB_README_MAX_CHARS", 14000)

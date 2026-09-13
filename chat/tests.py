@@ -188,6 +188,89 @@ class RagTests(TestCase):
         self.assertEqual(KnowledgeChunk.objects.count(), 2)
         self.assertIsNone(KnowledgeChunk.objects.first().embedding)
 
+    def test_profile_is_always_sent_even_when_retrieval_misses(self):
+        from chat import rag
+
+        KnowledgeDocument.objects.create(
+            kind=KnowledgeDocument.Kind.PROFILE,
+            source="profile",
+            title="Andrea Latorre — career profile",
+            content="Andrea builds RAG pipelines.",
+        )
+        with patch("chat.rag.embed_text", side_effect=EmbeddingError("no provider")):
+            context = rag.build_retrieved_context("do you know Kubernetes?")
+        self.assertIn("Andrea builds RAG pipelines.", context)
+
+    def test_profile_chunks_are_never_searched(self):
+        from chat.rag import retrievable_chunks
+
+        profile = KnowledgeDocument.objects.create(
+            kind=KnowledgeDocument.Kind.PROFILE, source="profile", content="p"
+        )
+        project = KnowledgeDocument.objects.create(
+            kind=KnowledgeDocument.Kind.GITHUB_README, source="o/r", content="r"
+        )
+        KnowledgeChunk.objects.create(
+            document=profile,
+            ordinal=0,
+            content="p",
+            content_hash="p1",
+            embedding=[0.0] * 1024,
+        )
+        KnowledgeChunk.objects.create(
+            document=project,
+            ordinal=0,
+            content="r",
+            content_hash="r1",
+            embedding=[1.0] + [0.0] * 1023,
+        )
+        self.assertEqual(
+            [chunk.document.source for chunk in retrievable_chunks()], ["o/r"]
+        )
+
+    def test_retrieval_caps_chunks_per_source(self):
+        """One long README must not fill the prompt: results stay diverse."""
+        from chat import rag
+
+        vector = [1.0] + [0.0] * 1023
+        loud = KnowledgeDocument.objects.create(
+            kind=KnowledgeDocument.Kind.GITHUB_README, source="o/loud", content="l"
+        )
+        quiet = KnowledgeDocument.objects.create(
+            kind=KnowledgeDocument.Kind.GITHUB_README, source="o/quiet", content="q"
+        )
+        for ordinal in range(3):
+            KnowledgeChunk.objects.create(
+                document=loud,
+                ordinal=ordinal,
+                content=f"l{ordinal}",
+                content_hash=f"l{ordinal}",
+                embedding=vector,
+            )
+        KnowledgeChunk.objects.create(
+            document=quiet,
+            ordinal=0,
+            content="q0",
+            content_hash="q0",
+            embedding=vector,
+        )
+        with patch("chat.rag.embed_text", return_value=vector):
+            hits = rag.retrieve("anything", top_k=3, min_score=0.5)
+        self.assertEqual(
+            [hit["source"] for hit in hits], ["o/loud", "o/loud", "o/quiet"]
+        )
+
+    def test_limit_per_source_keeps_the_best(self):
+        from chat.rag import _limit_per_source
+
+        candidates = [
+            {"source": source, "content": source, "score": 1.0} for source in "aaab"
+        ]
+        self.assertEqual(
+            [item["source"] for item in _limit_per_source(candidates, 5, 2)],
+            ["a", "a", "b"],
+        )
+
 
 @skipUnless(connection.vendor == "postgresql", "vector search needs pgvector")
 class RagVectorTests(TestCase):
@@ -197,7 +280,9 @@ class RagVectorTests(TestCase):
         from chat import rag
 
         document = KnowledgeDocument.objects.create(
-            kind="profile", source="profile", content="profile"
+            kind=KnowledgeDocument.Kind.GITHUB_README,
+            source="o/r",
+            content="readme",
         )
         near = [1.0, 0.0] + [0.0] * 1022
         far = [0.6, 0.8] + [0.0] * 1022  # cosine similarity 0.6 with `near`
@@ -373,6 +458,57 @@ class SyncKnowledgeCommandTests(TestCase):
         doc = KnowledgeDocument.objects.get(kind="github_readme", source="o/r")
         self.assertIn("Great stuff.", doc.content)
         self.assertEqual(doc.url, "https://github.com/o/r")
+
+    def test_exclusion_keys_accept_names_slugs_and_urls(self):
+        from chat.management.commands.sync_knowledge import exclusion_keys, is_excluded
+
+        keys = exclusion_keys(
+            [
+                "owner/repo",
+                "https://github.com/other/thing",
+                "Love-Maths",
+                "",
+            ]
+        )
+        self.assertTrue(is_excluded("owner/repo", keys))
+        self.assertTrue(is_excluded("owner/repo", keys))
+        self.assertTrue(is_excluded("other/thing", keys))
+        # A bare repository name matches whatever the owner is.
+        self.assertTrue(is_excluded("latorreandrea/Love-Maths", keys))
+        self.assertFalse(is_excluded("owner/kept", keys))
+
+    def test_collect_repos_skips_excluded_repos(self):
+        from chat.management.commands.sync_knowledge import Command
+
+        payload = [
+            {"full_name": "latorreandrea/keep-me", "fork": False},
+            {"full_name": "latorreandrea/Love-Maths", "fork": False},
+        ]
+        with override_settings(GITHUB_EXCLUDE_REPOS=["Love-Maths"]):
+            repos = Command()._collect_repos(
+                "latorreandrea", [], _FakeGithubClient(payload)
+            )
+        self.assertEqual(repos, ["latorreandrea/keep-me"])
+
+    def test_prune_removes_stale_documents_and_chunks(self):
+        from chat.management.commands.sync_knowledge import Command
+
+        stale = KnowledgeDocument.objects.create(
+            kind="github_readme", source="o/gone", content="bye"
+        )
+        KnowledgeChunk.objects.create(
+            document=stale, ordinal=0, content="bye", content_hash="g1"
+        )
+        kept = KnowledgeDocument.objects.create(
+            kind="github_readme", source="o/kept", content="hi"
+        )
+        kept_chunk = KnowledgeChunk.objects.create(
+            document=kept, ordinal=0, content="hi", content_hash="k1"
+        )
+        Command()._prune_github(["o/kept"])
+        self.assertFalse(KnowledgeDocument.objects.filter(source="o/gone").exists())
+        self.assertFalse(KnowledgeChunk.objects.filter(document_id=stale.pk).exists())
+        self.assertTrue(KnowledgeChunk.objects.filter(pk=kept_chunk.pk).exists())
 
 
 class _FakeResponse:

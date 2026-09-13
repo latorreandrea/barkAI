@@ -14,7 +14,7 @@ from django.conf import settings
 from django.db import connection
 
 from chat.embeddings import EmbeddingError, embed_text
-from chat.models import KnowledgeChunk
+from chat.models import KnowledgeChunk, KnowledgeDocument
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +23,20 @@ def retrieve(
     query: str,
     top_k: int | None = None,
     min_score: float | None = None,
+    max_per_source: int | None = None,
 ) -> list[dict]:
     """Return the most relevant knowledge chunks for a query.
 
     Each item is ``{"content", "source", "score"}``; ``score`` is the cosine
-    similarity (1.0 = identical direction).
+    similarity (1.0 = identical direction). At most ``max_per_source`` chunks of
+    a single document are kept, so one long README cannot fill the prompt.
     """
     query = (query or "").strip()
     if not query:
         return []
     top_k = top_k or getattr(settings, "RAG_TOP_K", 5)
-    min_score = getattr(settings, "RAG_MIN_SCORE", 0.25)
+    min_score = getattr(settings, "RAG_MIN_SCORE", 0.35)
+    max_per_source = max_per_source or getattr(settings, "RAG_MAX_PER_SOURCE", 2)
 
     try:
         query_vector = embed_text(query)
@@ -42,19 +45,67 @@ def retrieve(
         return []
 
     if connection.vendor == "postgresql":
-        return _retrieve_postgres(query_vector, top_k, min_score)
-    return _retrieve_python(query_vector, top_k, min_score)
+        candidates = _retrieve_postgres(query_vector, top_k, min_score)
+    else:
+        candidates = _retrieve_python(query_vector, top_k, min_score)
+    return _limit_per_source(candidates, top_k, max_per_source)
+
+
+def _limit_per_source(
+    candidates: list[dict], top_k: int, max_per_source: int
+) -> list[dict]:
+    """Keep the best candidates while capping how many share a source."""
+    seen: dict[str, int] = {}
+    kept: list[dict] = []
+    for item in candidates:
+        source = item["source"]
+        if seen.get(source, 0) >= max_per_source:
+            continue
+        seen[source] = seen.get(source, 0) + 1
+        kept.append(item)
+        if len(kept) >= top_k:
+            break
+    return kept
+
+
+def retrievable_chunks():
+    """Chunks that may take part in the similarity search.
+
+    The curated career profile is deliberately excluded: it is short, it applies
+    to *every* question and it matches even the vaguest query, so it would crowd
+    out the project chunks (2 of the top-3 slots in practice). It is injected
+    verbatim instead — see :func:`profile_context`.
+    """
+    return KnowledgeChunk.objects.filter(
+        embedding__isnull=False,
+        document__kind=KnowledgeDocument.Kind.GITHUB_README,
+    )
+
+
+def profile_context() -> str:
+    """The curated career profile, always sent to the model as ground truth."""
+    document = (
+        KnowledgeDocument.objects.filter(kind=KnowledgeDocument.Kind.PROFILE)
+        .order_by("source")
+        .first()
+    )
+    if document is None:
+        logger.warning("No career profile synced: run `python manage.py sync_knowledge`.")
+        return ""
+    header = document.title or "Career profile"
+    return f"### {header}\n{document.content}"
 
 
 def build_retrieved_context(query: str) -> str:
-    """Format the retrieved chunks as a prompt section ('' when nothing matches)."""
-    chunks = retrieve(query)
-    if not chunks:
-        return ""
-    sections = [
+    """Prompt section: the career profile plus the most relevant project chunks."""
+    sections = []
+    profile = profile_context()
+    if profile:
+        sections.append(profile)
+    sections.extend(
         f"### {chunk['source']} (relevance {chunk['score']:.2f})\n{chunk['content']}"
-        for chunk in chunks
-    ]
+        for chunk in retrieve(query)
+    )
     return "\n\n".join(sections)
 
 
@@ -62,10 +113,10 @@ def _retrieve_postgres(query_vector: list[float], top_k: int, min_score: float) 
     from pgvector.django import CosineDistance
 
     rows = (
-        KnowledgeChunk.objects.filter(embedding__isnull=False)
+        retrievable_chunks()
         .select_related("document")
         .annotate(distance=CosineDistance("embedding", query_vector))
-        .order_by("distance")[:top_k]
+        .order_by("distance")[: top_k * 4]
     )
     results = []
     for chunk in rows:
@@ -79,9 +130,7 @@ def _retrieve_postgres(query_vector: list[float], top_k: int, min_score: float) 
 
 def _retrieve_python(query_vector: list[float], top_k: int, min_score: float) -> list[dict]:
     scored = []
-    for chunk in KnowledgeChunk.objects.filter(embedding__isnull=False).select_related(
-        "document"
-    ):
+    for chunk in retrievable_chunks().select_related("document"):
         vector = chunk.embedding
         if not vector:
             continue
@@ -89,7 +138,7 @@ def _retrieve_python(query_vector: list[float], top_k: int, min_score: float) ->
     scored.sort(key=lambda item: item[0], reverse=True)
     return [
         {"content": chunk.content, "source": chunk.document.source, "score": score}
-        for score, chunk in scored[:top_k]
+        for score, chunk in scored[: top_k * 4]
         if score >= min_score
     ]
 
