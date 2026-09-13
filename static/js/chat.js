@@ -66,6 +66,12 @@
     var bubbleScrollEl = document.getElementById("speech-bubble-scroll");
     var idleSuggestionsEl = document.getElementById("idle-suggestions");
     var idleSuggestionsTextEl = document.getElementById("idle-suggestions-text");
+    var contactFormEl = document.getElementById("interview-contact");
+    var contactNameEl = document.getElementById("contact-name");
+    var contactEmailEl = document.getElementById("contact-email");
+    var contactCompanyEl = document.getElementById("contact-company");
+    var contactSaveBtn = document.getElementById("interview-contact-save");
+    var contactStatusEl = document.getElementById("interview-contact-status");
 
     if (sessionChip) {
         sessionChip.textContent = sessionId.slice(0, 8) + "…";
@@ -275,6 +281,66 @@
             }
         }
         return null;
+    }
+
+    // ================================================================ //
+    // 7) INTERVIEW HAND-OFF: once BarklAI flags an interview, reveal a //
+    //    small form so Andrea actually gets a way to reply. The details //
+    //    ride along with the next message AND have their own endpoint.  //
+    // ================================================================ //
+    // Returns the form values, or empties when the form is not showing (so a
+    // hidden form never overwrites stored details with blank strings).
+    function contactDetails() {
+        if (!contactFormEl || contactFormEl.hidden) {
+            return { hr_name: "", hr_email: "", company_name: "" };
+        }
+        return {
+            hr_name: contactNameEl ? contactNameEl.value.trim() : "",
+            hr_email: contactEmailEl ? contactEmailEl.value.trim() : "",
+            company_name: contactCompanyEl ? contactCompanyEl.value.trim() : ""
+        };
+    }
+
+    function revealContactForm() {
+        if (contactFormEl && contactFormEl.hidden) {
+            contactFormEl.hidden = false;
+        }
+    }
+
+    function hideContactForm() {
+        if (contactFormEl) {
+            contactFormEl.hidden = true;
+        }
+    }
+
+    // The two messages are translated server-side and carried as data attributes,
+    // so they stay in the Django catalogue instead of the JS one.
+    function contactMessage(name) {
+        if (contactStatusEl) {
+            return contactStatusEl.getAttribute("data-" + name + "-message") || "";
+        }
+        return "";
+    }
+
+    function setContactStatus(message, isError) {
+        if (!contactStatusEl) {
+            return;
+        }
+        if (!message) {
+            contactStatusEl.hidden = true;
+            contactStatusEl.textContent = "";
+            return;
+        }
+        contactStatusEl.textContent = message;
+        contactStatusEl.hidden = false;
+        contactStatusEl.classList.toggle("text-emerald-700", !isError);
+        contactStatusEl.classList.toggle("text-rose-600", !!isError);
+    }
+
+    // The details reached the backend: hide the form and confirm in his voice.
+    function showContactSaved() {
+        hideContactForm();
+        setContactStatus(contactMessage("saved"), false);
     }
 
     // ================================================================ //
@@ -607,7 +673,7 @@
         }
     }
 
-    function requestReply(text) {
+    function requestReply(text, details) {
         return fetch("/api/chat/send", {
             method: "POST",
             headers: {
@@ -616,7 +682,10 @@
             },
             body: JSON.stringify({
                 session_id: sessionId,
-                message: text
+                message: text,
+                hr_name: details.hr_name,
+                hr_email: details.hr_email,
+                company_name: details.company_name
             })
         }).then(function (response) {
             if (!response.ok) {
@@ -641,6 +710,10 @@
         inputEl.value = "";
         setBusy(true);
 
+        // Snapshot the hand-off form before the request: it may be hidden again
+        // as soon as the reply comes back.
+        var sentDetails = contactDetails();
+
         // 1) The previous live utterance moves up into the history while the
         //    user's new message is appended right below it.
         var flushPromise = flushBubbleToHistory();
@@ -650,7 +723,7 @@
         //    soon as the previous answer has finished moving up.
         setMascotState("searching");
         var requestDone = false;
-        var requestPromise = requestReply(text).then(function (data) {
+        var requestPromise = requestReply(text, sentDetails).then(function (data) {
             requestDone = true;
             return data;
         }, function (err) {
@@ -671,6 +744,15 @@
             // The agent decided the recruiter is unsure: offer quick questions.
             if (data.suggest_questions) {
                 showIdleSuggestions(null);
+            }
+            if (data.interview_requested) {
+                // Hand-off: keep asking for the details if we still have no way
+                // to reply, or confirm the moment they are on their way.
+                if (sentDetails.hr_email) {
+                    showContactSaved();
+                } else {
+                    revealContactForm();
+                }
             }
         } catch (err) {
             await flushPromise.catch(function () { return null; });
@@ -719,6 +801,12 @@
             } else if (!onboardingBusy) {
                 showBubbleIdle();
                 setMascotState(data.interview_requested ? "celebrating" : "idle");
+            }
+
+            // Returning to a session where an interview was requested: make sure
+            // the hand-off form (or its confirmation) is in front of the recruiter.
+            if (data.interview_requested) {
+                revealContactForm();
             }
         } catch (err) {
             showBubbleIdle();
@@ -860,6 +948,49 @@
         event.preventDefault();
         sendMessage();
     });
+
+    // The hand-off form has its own endpoint: saving the details must not cost
+    // an LLM call, and the recruiter does not have to send another message.
+    if (contactFormEl) {
+        contactFormEl.addEventListener("submit", function (event) {
+            event.preventDefault();
+            var details = contactDetails();
+            if (!details.hr_email) {
+                setContactStatus(contactMessage("error"), true);
+                return;
+            }
+            if (contactSaveBtn) {
+                contactSaveBtn.disabled = true;
+            }
+            fetch("/api/chat/contact", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": getCookie("csrftoken")
+                },
+                body: JSON.stringify({
+                    session_id: sessionId,
+                    hr_name: details.hr_name,
+                    hr_email: details.hr_email,
+                    company_name: details.company_name
+                })
+            }).then(function (response) {
+                if (!response.ok) {
+                    throw new Error("server returned HTTP " + response.status);
+                }
+                return response.json();
+            }).then(function () {
+                showContactSaved();
+            }).catch(function () {
+                setContactStatus(contactMessage("error"), true);
+            }).finally(function () {
+                if (contactSaveBtn) {
+                    contactSaveBtn.disabled = false;
+                }
+            });
+        });
+    }
+
     wireSuggestions();
 
     // Typing counts as activity: restart the idle countdown, and start the

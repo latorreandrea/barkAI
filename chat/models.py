@@ -131,3 +131,55 @@ class KnowledgeChunk(models.Model):
 
     def __str__(self) -> str:
         return f"{self.document.source} #{self.ordinal}"
+
+
+class InterviewRequest(models.Model):
+    """One explicit interview request captured from the chat.
+
+    Modelled as an *event* rather than as attributes on ``ChatSession``: a
+    recruiter may leave their details more than once (a correction, or two
+    people sharing the same link), and Andrea needs to know *when* it happened
+    and whether he has already been notified. Rows cascade with the session, so
+    the GDPR erasure button and the retention job remove them too.
+
+    The ``hr_*`` fields on ``ChatSession`` are kept in sync as a denormalised
+    "latest contact" cache for the admin list; the record of truth is here.
+    """
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    session = models.ForeignKey(
+        ChatSession,
+        on_delete=models.CASCADE,
+        related_name="interview_requests",
+        db_index=True,
+    )
+    hr_name = models.CharField("Recruiter name", max_length=120, blank=True)
+    hr_email = models.EmailField("Recruiter email", blank=True)
+    company_name = models.CharField("Company name", max_length=160, blank=True)
+    message = models.TextField(
+        "Triggering message",
+        blank=True,
+        help_text="The recruiter message that made BarklAI flag the interview.",
+    )
+    language = models.CharField("Language", max_length=8, blank=True)
+    created_at = models.DateTimeField("Created at", auto_now_add=True, db_index=True)
+    notified_at = models.DateTimeField(
+        "Notified at",
+        null=True,
+        blank=True,
+        help_text="When the notification email reached Andrea (NULL = still pending).",
+    )
+    notification_error = models.CharField(
+        "Notification error", max_length=255, blank=True
+    )
+
+    def __str__(self) -> str:
+        who = self.hr_name or self.hr_email or "unknown recruiter"
+        return f"Interview request from {who} ({self.session_id})"
+
+    @property
+    def is_notified(self) -> bool:
+        """True once the notification has been handed to the mail backend."""
+        return self.notified_at is not None

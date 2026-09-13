@@ -1,7 +1,23 @@
 """Admin registrations for the chat application."""
 from django.contrib import admin
 
-from .models import ChatMessage, ChatSession, KnowledgeChunk, KnowledgeDocument
+from .models import (
+    ChatMessage,
+    ChatSession,
+    InterviewRequest,
+    KnowledgeChunk,
+    KnowledgeDocument,
+)
+
+
+class InterviewRequestInline(admin.TabularInline):
+    """Show the interview requests right inside the session page."""
+
+    model = InterviewRequest
+    extra = 0
+    fields = ("created_at", "hr_name", "hr_email", "company_name", "notified_at")
+    readonly_fields = ("created_at", "notified_at")
+    show_change_link = True
 
 
 @admin.register(ChatSession)
@@ -17,6 +33,28 @@ class ChatSessionAdmin(admin.ModelAdmin):
     )
     list_filter = ("interview_requested", "created_at")
     search_fields = ("hr_name", "hr_email", "company_name")
+    inlines = (InterviewRequestInline,)
+
+
+@admin.register(InterviewRequest)
+class InterviewRequestAdmin(admin.ModelAdmin):
+    """The durable record Andrea acts on: who, how to reply, already notified?"""
+
+    list_display = (
+        "created_at",
+        "hr_name",
+        "hr_email",
+        "company_name",
+        "is_notified",
+        "session",
+    )
+    list_filter = ("notified_at", "created_at")
+    search_fields = ("hr_name", "hr_email", "company_name", "message")
+    readonly_fields = ("created_at", "notified_at", "notification_error")
+
+    @admin.display(boolean=True, description="Notified")
+    def is_notified(self, obj: InterviewRequest) -> bool:
+        return obj.is_notified
 
 
 @admin.register(ChatMessage)

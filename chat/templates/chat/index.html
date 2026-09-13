@@ -130,6 +130,59 @@
                 class="sticky bottom-0 z-30 shrink-0 border-t-2 border-dashed border-slate-200
                        bg-white/95 px-3 pb-2 pt-3 backdrop-blur md:px-4">
 
+            {# Interview hand-off: chat.js reveals this form once the agent has  #}
+            {# flagged an interview request, so Andrea actually receives a way   #}
+            {# to reply. It posts the details to /api/chat/contact, which stores #}
+            {# them on the InterviewRequest and emails Andrea (no LLM call).     #}
+            <form id="interview-contact" hidden
+                  class="mx-auto mb-2 w-full max-w-xl rounded-2xl border-[3px] border-slate-900
+                         bg-amber-50 px-4 py-3 shadow-[4px_4px_0_0_#0f172a]">
+                <p class="mb-2 text-[12px] font-black uppercase tracking-wider text-slate-900">
+                    {% trans "🗓 Interview request — leave your details" %}
+                </p>
+                <div class="flex flex-col gap-2 sm:flex-row">
+                    <label for="contact-name" class="sr-only">{% trans "Your name" %}</label>
+                    <input id="contact-name" name="hr_name" type="text" maxlength="120"
+                           autocomplete="name" placeholder="{% trans 'Your name' %}"
+                           class="min-w-0 flex-1 rounded-xl border-2 border-slate-300 bg-white px-3 py-2
+                                  text-sm text-slate-900 placeholder-slate-400 outline-none transition
+                                  focus:border-amber-500/70 focus:ring-2 focus:ring-amber-400/40" />
+                    <label for="contact-email" class="sr-only">{% trans "Your email" %}</label>
+                    <input id="contact-email" name="hr_email" type="email" required maxlength="254"
+                           autocomplete="email" placeholder="{% trans 'Your email' %}"
+                           class="min-w-0 flex-1 rounded-xl border-2 border-slate-300 bg-white px-3 py-2
+                                  text-sm text-slate-900 placeholder-slate-400 outline-none transition
+                                  focus:border-amber-500/70 focus:ring-2 focus:ring-amber-400/40" />
+                    <label for="contact-company" class="sr-only">{% trans "Company (optional)" %}</label>
+                    <input id="contact-company" name="company_name" type="text" maxlength="160"
+                           autocomplete="organization" placeholder="{% trans 'Company (optional)' %}"
+                           class="min-w-0 flex-1 rounded-xl border-2 border-slate-300 bg-white px-3 py-2
+                                  text-sm text-slate-900 placeholder-slate-400 outline-none transition
+                                  focus:border-amber-500/70 focus:ring-2 focus:ring-amber-400/40" />
+                </div>
+                <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
+                    <p class="text-[10px] text-slate-500">
+                        {% trans "Shared only with Andrea, so he can get back to you about the interview." %}
+                    </p>
+                    <button type="submit" id="interview-contact-save"
+                            class="shrink-0 rounded-xl border-2 border-slate-900 bg-amber-300 px-3 py-1.5
+                                   text-[11px] font-black uppercase tracking-wider text-slate-950
+                                   shadow-[3px_3px_0_0_#0f172a] transition hover:bg-amber-200
+                                   active:translate-x-[2px] active:translate-y-[2px]
+                                   active:shadow-[1px_1px_0_0_#0f172a] disabled:opacity-50">
+                        {% trans "Save my details" %}
+                    </button>
+                </div>
+            </form>
+
+            {# Confirmation / error line, OUTSIDE the form so it stays visible once #}
+            {# the form is hidden after a successful save.                          #}
+            <p id="interview-contact-status" role="status" hidden
+               data-saved-message="{% trans '🐾 Thanks! Your details are on their way to Andrea.' %}"
+               data-error-message="{% trans 'Woof… I could not save your details. Please try again.' %}"
+               class="mx-auto mt-1.5 w-full max-w-xl text-center text-[11px] font-semibold
+                      text-emerald-700"></p>
+
             <form id="chat-form" class="mx-auto flex w-full max-w-xl items-center gap-2"
                   autocomplete="off">
                 <label for="chat-input" class="sr-only">{% trans "Message BarklAI" %}</label>

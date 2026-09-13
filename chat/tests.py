@@ -6,6 +6,8 @@ from unittest import skipUnless
 from unittest.mock import patch
 from uuid import uuid4
 
+from django.core import mail
+from django.core.cache import cache
 from django.core.management import call_command
 from django.db import connection
 from django.http import Http404
@@ -15,10 +17,19 @@ from django.utils import timezone
 from django.views import defaults
 
 from chat.embeddings import EmbeddingError
-from chat.models import ChatMessage, ChatSession, KnowledgeChunk, KnowledgeDocument
+from chat.interviews import capture_interview_request, mark_notified
+from chat.models import (
+    ChatMessage,
+    ChatSession,
+    InterviewRequest,
+    KnowledgeChunk,
+    KnowledgeDocument,
+)
+from chat.prompts import build_system_prompt
 from chat.services import (
     FALLBACK_NO_KEY,
     FALLBACK_UNREACHABLE,
+    detect_language,
     generate_reply,
     get_knowledge_text,
 )
@@ -415,6 +426,282 @@ class AgentServiceTests(TestCase):
             kind="profile", source="profile", content="Andrea builds RAG pipelines."
         )
         self.assertIn("Andrea builds RAG pipelines.", get_knowledge_text())
+
+
+class LanguageDetectionTests(TestCase):
+    """The tiny detector behind the "answer in the recruiter's language" guard."""
+
+    def test_danish_message_is_detected(self):
+        self.assertEqual(
+            detect_language("Hvilke erfaringer har Andrea med Django?"), "da"
+        )
+
+    def test_danish_letters_are_enough(self):
+        self.assertEqual(detect_language("Kan vi mødes i næste uge?"), "da")
+
+    def test_english_message_is_detected(self):
+        self.assertEqual(detect_language("What projects has Andrea built?"), "en")
+
+    def test_ambiguous_message_stays_undecided(self):
+        # A one-word greeting must not trigger an (expensive) model retry.
+        self.assertIsNone(detect_language("ok"))
+        self.assertIsNone(detect_language("Andrea"))
+
+    def test_prompt_no_longer_demands_a_hardcoded_english_reply(self):
+        prompt = build_system_prompt("some knowledge", "da")
+        self.assertIn("LANGUAGE", prompt)
+        self.assertIn("Danish", prompt)
+        self.assertNotIn("Your answer, in English", prompt)
+
+
+class LanguageGuardTests(TestCase):
+    """A Danish question must not come back in English (the v0.3 regression)."""
+
+    DANISH_REPLY = json.dumps(
+        {
+            "reply": "Voff! Andrea har arbejdet med Django og PostgreSQL.",
+            "interview_requested": False,
+            "suggest_questions": False,
+        }
+    )
+    ENGLISH_REPLY = json.dumps(
+        {
+            "reply": "Woof! Andrea has worked with Django and PostgreSQL.",
+            "interview_requested": False,
+            "suggest_questions": False,
+        }
+    )
+
+    @override_settings(GROQ_API_KEY="test-key", AGENT_LANGUAGE_GUARD=True)
+    @patch("chat.services._call_groq", side_effect=[ENGLISH_REPLY, DANISH_REPLY])
+    def test_wrong_language_reply_is_retried_once(self, call):
+        result = generate_reply("Hvilke erfaringer har Andrea med Django?")
+        self.assertIn("Voff", result.reply)
+        self.assertEqual(call.call_count, 2)
+        # The retry prompt must explicitly ask for Danish.
+        self.assertIn("Danish", call.call_args.args[-1])
+
+    @override_settings(GROQ_API_KEY="test-key", AGENT_LANGUAGE_GUARD=True)
+    @patch("chat.services._call_groq", side_effect=[ENGLISH_REPLY, ENGLISH_REPLY])
+    def test_failed_retry_keeps_the_first_answer(self, call):
+        result = generate_reply("Hvilke erfaringer har Andrea med Django?")
+        self.assertIn("Woof", result.reply)
+        self.assertEqual(call.call_count, 2)  # exactly one retry, never a loop
+
+    @override_settings(GROQ_API_KEY="test-key", AGENT_LANGUAGE_GUARD=True)
+    @patch("chat.services._call_groq", return_value=ENGLISH_REPLY)
+    def test_matching_language_is_not_retried(self, call):
+        generate_reply("What projects has Andrea built?")
+        self.assertEqual(call.call_count, 1)
+
+    @override_settings(GROQ_API_KEY="test-key", AGENT_LANGUAGE_GUARD=False)
+    @patch("chat.services._call_groq", return_value=ENGLISH_REPLY)
+    def test_guard_can_be_disabled(self, call):
+        generate_reply("Hvilke erfaringer har Andrea med Django?")
+        self.assertEqual(call.call_count, 1)
+
+    @override_settings(GROQ_API_KEY="")
+    def test_offline_danish_interview_hint_is_flagged_in_danish(self):
+        result = generate_reply("Kan vi booke en samtale i næste uge?")
+        self.assertTrue(result.interview_requested)
+        self.assertEqual(result.barkley_state, "celebrating")
+        self.assertIn("Vov", result.reply)  # the Danish fallback copy
+
+
+class InterviewRequestTests(TestCase):
+    """Capture rules for the durable InterviewRequest record."""
+
+    def test_capture_creates_an_event_and_syncs_the_session(self):
+        session = ChatSession.objects.create()
+        request_obj = capture_interview_request(
+            session,
+            hr_name="Mette",
+            hr_email="mette@firma.dk",
+            company_name="Firma ApS",
+            message="Kan vi mødes?",
+            language="da",
+        )
+        self.assertEqual(session.interview_requests.count(), 1)
+        self.assertEqual(request_obj.hr_email, "mette@firma.dk")
+        self.assertEqual(request_obj.language, "da")
+        self.assertFalse(request_obj.is_notified)
+
+        session.refresh_from_db()
+        self.assertTrue(session.interview_requested)
+        self.assertEqual(session.hr_email, "mette@firma.dk")
+        self.assertEqual(session.hr_name, "Mette")
+
+    def test_pending_request_is_updated_not_duplicated(self):
+        session = ChatSession.objects.create()
+        first = capture_interview_request(session, hr_email="wrong@firma.dk")
+        second = capture_interview_request(session, hr_email="right@firma.dk")
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(session.interview_requests.count(), 1)
+        self.assertEqual(second.hr_email, "right@firma.dk")
+
+    def test_unchanged_email_after_notification_does_not_create_a_second_event(self):
+        session = ChatSession.objects.create()
+        first = capture_interview_request(session, hr_email="mette@firma.dk")
+        mark_notified(first)
+        second = capture_interview_request(session, hr_email="mette@firma.dk")
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(session.interview_requests.count(), 1)
+
+    def test_corrected_email_after_notification_creates_a_new_event(self):
+        session = ChatSession.objects.create()
+        first = capture_interview_request(session, hr_email="old@firma.dk")
+        mark_notified(first)
+        second = capture_interview_request(session, hr_email="new@firma.dk")
+        self.assertNotEqual(first.pk, second.pk)
+        self.assertEqual(session.interview_requests.count(), 2)
+
+    def test_erasing_the_session_removes_its_requests(self):
+        session = ChatSession.objects.create()
+        capture_interview_request(session, hr_email="mette@firma.dk")
+        session.delete()
+        self.assertEqual(InterviewRequest.objects.count(), 0)
+
+
+@override_settings(
+    GROQ_API_KEY="",
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    INTERVIEW_NOTIFY_EMAIL="andrea@example.com",
+    DEFAULT_FROM_EMAIL="BarkAI <noreply@barkai.test>",
+)
+class InterviewNotificationTests(TestCase):
+    """The hand-off flow: details captured, Andrea emailed, never twice."""
+
+    CONTACT_URL = "/api/chat/contact"
+
+    def setUp(self):
+        mail.outbox = []
+
+    def _post_contact(self, session_id, **overrides):
+        payload = {
+            "session_id": str(session_id),
+            "hr_name": "Mette Hansen",
+            "hr_email": "mette@firma.dk",
+            "company_name": "Firma ApS",
+        }
+        payload.update(overrides)
+        return self.client.post(
+            self.CONTACT_URL,
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def test_contact_endpoint_stores_details_and_notifies(self):
+        session_id = uuid4()
+        response = self._post_contact(session_id)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["saved"])
+        self.assertTrue(body["notified"])
+
+        request_obj = InterviewRequest.objects.get(session__session_id=session_id)
+        self.assertEqual(request_obj.hr_email, "mette@firma.dk")
+        self.assertEqual(request_obj.company_name, "Firma ApS")
+        self.assertTrue(request_obj.is_notified)
+
+        self.assertEqual(len(mail.outbox), 1)
+        email = mail.outbox[0]
+        self.assertIn("mette@firma.dk", email.body)
+        self.assertIn("Firma ApS", email.body)
+        self.assertIn(str(session_id), email.body)
+
+    def test_invalid_email_is_rejected(self):
+        response = self._post_contact(uuid4(), hr_email="not-an-email")
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(InterviewRequest.objects.count(), 0)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_email_is_required(self):
+        response = self._post_contact(uuid4(), hr_email="")
+        self.assertEqual(response.status_code, 422)
+
+    def test_resubmitting_the_same_details_does_not_notify_twice(self):
+        session_id = uuid4()
+        self._post_contact(session_id)
+        self._post_contact(session_id, hr_name="Mette H.")
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(InterviewRequest.objects.count(), 1)
+
+    @override_settings(INTERVIEW_NOTIFY_EMAIL="")
+    def test_details_are_stored_even_when_notifications_are_disabled(self):
+        session_id = uuid4()
+        response = self._post_contact(session_id)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["saved"])
+        self.assertFalse(response.json()["notified"])
+        self.assertEqual(len(mail.outbox), 0)
+
+        request_obj = InterviewRequest.objects.get(session__session_id=session_id)
+        self.assertFalse(request_obj.is_notified)
+
+    def test_send_persists_details_and_records_the_interview(self):
+        session_id = uuid4()
+        response = self.client.post(
+            "/api/chat/send",
+            data=json.dumps(
+                {
+                    "session_id": str(session_id),
+                    "message": "I would like to schedule an interview",
+                    "hr_name": "Mette",
+                    "hr_email": "mette@firma.dk",
+                    "company_name": "Firma ApS",
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        session = ChatSession.objects.get(session_id=session_id)
+        self.assertTrue(session.interview_requested)
+        self.assertEqual(session.interview_requests.count(), 1)
+        self.assertEqual(session.interview_requests.first().hr_name, "Mette")
+        self.assertEqual(len(mail.outbox), 1)
+
+
+class ChatGuardrailTests(TestCase):
+    """Length cap and rate limiting on the public chat endpoint."""
+
+    SEND_URL = "/api/chat/send"
+
+    def setUp(self):
+        cache.clear()  # Throttle counters live in the cache, not the database.
+
+    @override_settings(GROQ_API_KEY="")
+    def test_oversized_message_is_rejected(self):
+        response = self.client.post(
+            self.SEND_URL,
+            data=json.dumps({"session_id": str(uuid4()), "message": "x" * 2001}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 422)
+
+    @override_settings(
+        GROQ_API_KEY="", CHAT_RATE_LIMIT_PER_SESSION=1, CHAT_RATE_LIMIT_PER_IP=1000
+    )
+    def test_rate_limit_returns_429_after_the_cap(self):
+        payload = json.dumps({"session_id": str(uuid4()), "message": "hello"})
+        first = self.client.post(
+            self.SEND_URL, data=payload, content_type="application/json"
+        )
+        second = self.client.post(
+            self.SEND_URL, data=payload, content_type="application/json"
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+
+    @override_settings(
+        GROQ_API_KEY="", CHAT_RATE_LIMIT_PER_SESSION=0, CHAT_RATE_LIMIT_PER_IP=0
+    )
+    def test_zero_limits_disable_the_throttle(self):
+        payload = json.dumps({"session_id": str(uuid4()), "message": "hello"})
+        for _ in range(3):
+            response = self.client.post(
+                self.SEND_URL, data=payload, content_type="application/json"
+            )
+            self.assertEqual(response.status_code, 200)
 
 
 @override_settings(GROQ_API_KEY="")

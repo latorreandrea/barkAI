@@ -247,6 +247,41 @@ RAG_MIN_SCORE = env_float("RAG_MIN_SCORE", 0.35)
 # Chunks longer than this many characters are split during indexing.
 RAG_CHUNK_MAX_CHARS = env_int("RAG_CHUNK_MAX_CHARS", 1200)
 
+# --- Email & interview notifications --------------------------------------
+# BarklAI emails Andrea when a recruiter asks for an interview. The console
+# backend is the default, so local runs and the test suite need no SMTP server;
+# production exports the SMTP settings (Gmail example in the README):
+#   EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+#   EMAIL_HOST=smtp.gmail.com  EMAIL_PORT=587  EMAIL_USE_TLS=True
+#   EMAIL_HOST_USER=<gmail address>  EMAIL_HOST_PASSWORD=<app password>
+EMAIL_BACKEND = env_str("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = env_str("EMAIL_HOST", "")
+EMAIL_PORT = env_int("EMAIL_PORT", 587)
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", default="True")
+EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", default="False")
+EMAIL_HOST_USER = env_str("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = env_str("EMAIL_HOST_PASSWORD", "")
+# Hard cap so an unreachable SMTP server can never hang the recruiter's chat.
+EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
+DEFAULT_FROM_EMAIL = env_str("DEFAULT_FROM_EMAIL", "BarkAI <noreply@localhost>")
+# Where interview requests are reported. Blank disables the notification (the
+# request is still stored and visible in the admin).
+INTERVIEW_NOTIFY_EMAIL = env_str("INTERVIEW_NOTIFY_EMAIL", "")
+# Public base URL, used to build the admin deep link inside the notification.
+SITE_BASE_URL = env_str("SITE_BASE_URL", "")
+
+# --- Chat abuse protection ------------------------------------------------
+# The chat endpoint is public and costs an LLM call per message, so both the
+# session and the client IP get a fixed-window cap (see chat/throttle.py).
+CHAT_RATE_LIMIT_PER_SESSION = env_int("CHAT_RATE_LIMIT_PER_SESSION", 20)
+CHAT_RATE_LIMIT_PER_IP = env_int("CHAT_RATE_LIMIT_PER_IP", 60)
+CHAT_RATE_LIMIT_WINDOW_SECONDS = env_int("CHAT_RATE_LIMIT_WINDOW_SECONDS", 300)
+
+# --- Agent guardrails -----------------------------------------------------
+# Retry once when the model answers in a different language from the question
+# (the "Danish question, English answer" regression — see chat/services.py).
+AGENT_LANGUAGE_GUARD = env_bool("AGENT_LANGUAGE_GUARD", default="True")
+
 # --- Privacy / GDPR -------------------------------------------------------
 # Conversations older than this many days are purged by
 # `python manage.py purge_old_sessions` (data minimisation, art. 5 GDPR).

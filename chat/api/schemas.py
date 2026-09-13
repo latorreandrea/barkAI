@@ -3,6 +3,7 @@ from datetime import datetime
 from uuid import UUID
 
 from ninja import Schema
+from pydantic import Field
 
 
 class MessageOut(Schema):
@@ -26,10 +27,11 @@ class SendIn(Schema):
     """Payload for POST /api/chat/send."""
 
     session_id: UUID
-    message: str
-    hr_name: str = ""
-    hr_email: str = ""
-    company_name: str = ""
+    # Hard caps mirroring the composer's maxlength; oversized input is a 422.
+    message: str = Field(..., min_length=1, max_length=2000)
+    hr_name: str = Field("", max_length=120)
+    hr_email: str = Field("", max_length=254)
+    company_name: str = Field("", max_length=160)
 
 
 class BarkleyOut(Schema):
@@ -42,3 +44,26 @@ class BarkleyOut(Schema):
     # True when the agent thinks the recruiter is unsure what to ask, so the UI
     # can offer the quick-question chips inside the speech bubble.
     suggest_questions: bool = False
+
+
+class ContactIn(Schema):
+    """Payload for POST /api/chat/contact (the interview hand-off form).
+
+    An email is required: the whole point of the form is giving Andrea a way to
+    reply to the recruiter.
+    """
+
+    session_id: UUID
+    hr_name: str = Field("", max_length=120)
+    hr_email: str = Field(..., min_length=1, max_length=254)
+    company_name: str = Field("", max_length=160)
+
+
+class ContactOut(Schema):
+    """Confirmation that the recruiter's details were stored."""
+
+    session_id: UUID
+    saved: bool
+    # False when notifications are disabled (INTERVIEW_NOTIFY_EMAIL blank) or the
+    # SMTP send failed; the details are stored either way.
+    notified: bool

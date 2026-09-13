@@ -6,18 +6,24 @@ answer grounded in the knowledge base (career profile + GitHub READMEs). When
 the key is missing — or when Groq is unreachable — BarklAI falls back to a
 consistent, in-character message that playfully reports the connection problem,
 so the recruiter always gets an answer instead of a stack trace.
+
+The agent must also answer in the recruiter's language, so :func:`generate_reply`
+detects the language of the message and asks the model once more when it replies
+in the wrong one (:func:`detect_language` + the ``AGENT_LANGUAGE_GUARD`` setting).
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 
 from django.conf import settings
-from django.utils.translation import gettext
+from django.utils import translation
+from django.utils.translation import get_language, gettext
 
 from chat.models import KnowledgeDocument
-from chat.prompts import build_system_prompt
+from chat.prompts import build_system_prompt, language_name
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +53,10 @@ FALLBACK_INTERVIEW = (
 )
 
 # Words that strongly suggest the recruiter wants to book an interview. The live
-# model decides this itself; the offline fallback uses these heuristics.
-_INTERVIEW_HINTS = (
+# model decides this itself; the offline fallback uses these heuristics. Both
+# languages are covered, otherwise a Danish recruiter would never be flagged
+# while Groq is unreachable.
+_EN_INTERVIEW_HINTS = (
     "interview",
     "meeting",
     "schedule",
@@ -61,6 +69,62 @@ _INTERVIEW_HINTS = (
     "conversation",
     "call",
 )
+_DA_INTERVIEW_HINTS = (
+    "samtale",
+    "interview",
+    "møde",
+    "mødes",
+    "booke",
+    "aftale",
+    "ringe",
+    "opkald",
+    "snakke med",
+    "tid til",
+)
+_INTERVIEW_HINTS = _EN_INTERVIEW_HINTS + _DA_INTERVIEW_HINTS
+
+# --- Language detection ---------------------------------------------------
+# Deliberately tiny and dependency-free: enough to catch the "Danish question,
+# English answer" regression without shipping a language-detection model.
+_DA_MARKERS = frozenset(
+    {
+        "og", "er", "har", "hvad", "hvordan", "hvor", "hvilke", "hvilken",
+        "kan", "jeg", "vi", "til", "med", "for", "ikke", "den", "det", "der",
+        "som", "hans", "arbejde", "erfaring", "samtale", "møde", "udvikler",
+        "projekt", "projekter", "kompetencer", "virksomhed", "opgaver",
+    }
+)
+_EN_MARKERS = frozenset(
+    {
+        "the", "and", "is", "are", "has", "have", "what", "how", "where",
+        "which", "can", "we", "to", "with", "for", "not", "about", "interview",
+        "experience", "work", "project", "projects", "developer", "you", "your",
+        "would", "like", "his", "he", "she", "does", "do", "tell",
+    }
+)
+_DA_LETTERS = frozenset("æøåÆØÅ")
+
+
+def detect_language(text: str) -> str | None:
+    """Best-effort ``"da"`` / ``"en"`` for a message, ``None`` when undecidable.
+
+    ``None`` is intentional: the guard then stays quiet instead of triggering an
+    unnecessary (and paid) model retry for a one-word message.
+    """
+    words = re.findall(r"[a-zæøå]+", (text or "").lower())
+    if not words:
+        return None
+    danish = sum(1 for word in words if word in _DA_MARKERS)
+    english = sum(1 for word in words if word in _EN_MARKERS)
+    if any(char in _DA_LETTERS for char in (text or "")):
+        danish += 2
+    if danish == english == 0:
+        return None
+    if danish > english:
+        return "da"
+    if english > danish:
+        return "en"
+    return None
 
 
 @dataclass(frozen=True)
@@ -74,12 +138,13 @@ class BarkleyResponse:
 
 
 def generate_reply(
-    user_message: str, history: list[dict] | None = None
+    user_message: str, history: list[dict] | None = None, language: str | None = None
 ) -> BarkleyResponse:
     """Produce BarklAI's reply for a message plus the prior conversation turns.
 
     ``history`` is a chronological list of ``{"role", "content"}`` dicts
-    (``role`` is ``"user"`` or ``"assistant"``).
+    (``role`` is ``"user"`` or ``"assistant"``). ``language`` is the active
+    interface language, used only as the fallback for ambiguous messages.
     """
     user_message = (user_message or "").strip()
     api_key = getattr(settings, "GROQ_API_KEY", "")
@@ -87,8 +152,33 @@ def generate_reply(
     if not api_key:
         return _offline_reply(user_message)
 
+    ui_language = language or get_language() or "en"
+    # The language the recruiter actually wrote in; ``None`` when undecidable.
+    expected_language = detect_language(user_message)
+    system_prompt = build_system_prompt(
+        _knowledge_for_prompt(user_message), ui_language
+    )
+
     try:
-        raw = _call_groq(user_message, history or [], api_key)
+        result = _parse_reply(
+            _call_groq(user_message, history or [], api_key, system_prompt)
+        )
+        if _should_retry_for_language(expected_language, result.reply):
+            logger.info(
+                "Reply language mismatch (expected %s); asking Groq once more.",
+                expected_language,
+            )
+            retry = _parse_reply(
+                _call_groq(
+                    user_message,
+                    history or [],
+                    api_key,
+                    _correction_prompt(system_prompt, expected_language),
+                )
+            )
+            if not _should_retry_for_language(expected_language, retry.reply):
+                return retry
+        return result
     except Exception as exc:  # noqa: BLE001 - any client/network failure -> copy
         logger.exception("Groq request failed: %s", exc)
         return BarkleyResponse(
@@ -96,7 +186,25 @@ def generate_reply(
             barkley_state="speaking",
             interview_requested=False,
         )
-    return _parse_reply(raw)
+
+
+def _should_retry_for_language(expected: str | None, reply: str) -> bool:
+    """True when the reply is confidently written in the wrong language."""
+    if not expected or not getattr(settings, "AGENT_LANGUAGE_GUARD", True):
+        return False
+    detected = detect_language(reply)
+    return detected is not None and detected != expected
+
+
+def _correction_prompt(system_prompt: str, expected: str) -> str:
+    """System prompt plus an explicit "rewrite it in <language>" correction."""
+    return (
+        system_prompt
+        + "\n\nCORRECTION: your previous attempt answered in the wrong language. "
+        "Rewrite the answer in "
+        + language_name(expected)
+        + ", keeping exactly the same facts. Return the same JSON object."
+    )
 
 
 def get_knowledge_text() -> str:
@@ -127,17 +235,14 @@ def _knowledge_for_prompt(user_message: str) -> str:
     return get_knowledge_text()
 
 
-def _call_groq(user_message: str, history: list[dict], api_key: str) -> str:
+def _call_groq(
+    user_message: str, history: list[dict], api_key: str, system_prompt: str
+) -> str:
     """Call Groq in JSON mode and return the raw assistant content."""
     from groq import Groq  # Imported lazily so the mock path needs no SDK.
 
     client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
-    messages = [
-        {
-            "role": "system",
-            "content": build_system_prompt(_knowledge_for_prompt(user_message)),
-        }
-    ]
+    messages = [{"role": "system", "content": system_prompt}]
     limit = getattr(settings, "AGENT_HISTORY_LIMIT", 20)
     for turn in history[-limit:]:
         role = turn.get("role")
@@ -188,16 +293,23 @@ def _loads_json_object(raw: str) -> dict:
 
 
 def _offline_reply(user_message: str) -> BarkleyResponse:
-    """Consistent, in-character fallback used when no API key is configured."""
+    """Consistent, in-character fallback used when no API key is configured.
+
+    The copy follows the language the recruiter wrote in (the strings are
+    translated in ``locale/da``), so offline mode stays bilingual too.
+    """
     text = user_message.lower()
-    if any(hint in text for hint in _INTERVIEW_HINTS):
+    is_interview = any(hint in text for hint in _INTERVIEW_HINTS)
+    # Prefer the language of the message; fall back to the interface language.
+    with translation.override(detect_language(user_message) or get_language() or "en"):
+        if is_interview:
+            return BarkleyResponse(
+                reply=gettext(FALLBACK_INTERVIEW),
+                barkley_state="celebrating",
+                interview_requested=True,
+            )
         return BarkleyResponse(
-            reply=gettext(FALLBACK_INTERVIEW),
-            barkley_state="celebrating",
-            interview_requested=True,
+            reply=gettext(FALLBACK_NO_KEY),
+            barkley_state="speaking",
+            interview_requested=False,
         )
-    return BarkleyResponse(
-        reply=gettext(FALLBACK_NO_KEY),
-        barkley_state="speaking",
-        interview_requested=False,
-    )

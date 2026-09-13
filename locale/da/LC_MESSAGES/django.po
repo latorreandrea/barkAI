@@ -206,3 +206,30 @@ msgstr "Tilbage til chatten"
 
 msgid "Delete my conversation"
 msgstr "Slet min samtale"
+
+# --- Interview hand-off form (v0.4) ---------------------------------------
+
+msgid "🗓 Interview request — leave your details"
+msgstr "🗓 Interviewanmodning — efterlad dine oplysninger"
+
+msgid "Your name"
+msgstr "Dit navn"
+
+msgid "Your email"
+msgstr "Din e-mail"
+
+msgid "Company (optional)"
+msgstr "Virksomhed (valgfrit)"
+
+msgid "Shared only with Andrea, so he can get back to you about the interview."
+msgstr "Deles kun med Andrea, så han kan vende tilbage til dig om samtalen."
+
+msgid "Save my details"
+msgstr "Gem mine oplysninger"
+
+msgid "🐾 Thanks! Your details are on their way to Andrea."
+msgstr "🐾 Tak! Dine oplysninger er på vej til Andrea."
+
+msgid "Woof… I could not save your details. Please try again."
+msgstr "Vov… jeg kunne ikke gemme dine oplysninger. Prøv venligst igen."
+
