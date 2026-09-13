@@ -20,10 +20,10 @@ What sets me apart is **resilience** and a relentless **focus on getting the obj
 ## Roles & seniority
 
 ### Developer — PLT Energia (Cesena, Italy) · 2 years
-Built and maintained **Google Cloud** data pipelines that ingested data from **PostgreSQL** into
-**BigQuery**, plus the analytical queries on top. Developed **Python tools** that pulled data from
-Italian national systems and populated BigQuery tables.
-*Focus: ETL / data engineering · Python · Google Cloud · SQL.*
+Built and maintained **Google Cloud** data pipelines (**Cloud Data Fusion**) that ingested data from
+**PostgreSQL** into **BigQuery**, plus the analytical queries on top. Developed **Python tools** that
+pulled data from Italian national systems and populated BigQuery tables.
+*Focus: ETL / data engineering · Cloud Data Fusion · Python · Google Cloud · SQL.*
 
 ### Project Manager — Eni Plenitude (Italy) · 1 year
 PLT Energia was acquired by Eni Plenitude; in the new organisation I moved into a
