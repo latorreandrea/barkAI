@@ -96,17 +96,25 @@ def profile_context() -> str:
     return f"### {header}\n{document.content}"
 
 
-def build_retrieved_context(query: str) -> str:
-    """Prompt section: the career profile plus the most relevant project chunks."""
-    sections = []
+def build_retrieved_context_with_sources(query: str) -> tuple[str, list[str]]:
+    """Prompt section plus the labels BarklAI is allowed to cite.
+
+    Both come from one call on purpose: embedding is an HTTP request, so a second
+    ``retrieve()`` just to collect the labels would double the cost and the latency.
+    """
+    chunks = retrieve(query)
     profile = profile_context()
-    if profile:
-        sections.append(profile)
+    sections = [profile] if profile else []
     sections.extend(
         f"### {chunk['source']} (relevance {chunk['score']:.2f})\n{chunk['content']}"
-        for chunk in retrieve(query)
+        for chunk in chunks
     )
-    return "\n\n".join(sections)
+    return "\n\n".join(sections), sorted({chunk["source"] for chunk in chunks})
+
+
+def build_retrieved_context(query: str) -> str:
+    """Prompt section: the career profile plus the most relevant project chunks."""
+    return build_retrieved_context_with_sources(query)[0]
 
 
 def _retrieve_postgres(query_vector: list[float], top_k: int, min_score: float) -> list[dict]:

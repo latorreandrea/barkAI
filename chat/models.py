@@ -54,6 +54,15 @@ class ChatMessage(models.Model):
     )
     sender = models.CharField("Sender", max_length=16, choices=Sender.choices)
     content = models.TextField("Content")
+    sources = models.JSONField(
+        "Cited sources",
+        default=list,
+        blank=True,
+        help_text=(
+            "Knowledge-base labels BarklAI cited for this reply "
+            "(always empty on a user turn)."
+        ),
+    )
     created_at = models.DateTimeField("Created at", auto_now_add=True, db_index=True)
 
     def __str__(self) -> str:

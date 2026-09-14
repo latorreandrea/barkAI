@@ -110,6 +110,10 @@
                 </svg>
             </div>
 
+            {# Translated label for the citation chips. chat.js reads it from     #}
+            {# here, so the string stays in the Django catalogue (not the JS one). #}
+            <span id="sources-label" hidden data-label="{% trans 'Sources' %}"></span>
+
             {# BarklAI video, shown at the MP4's own aspect ratio (the real clips  #}
             {# are portrait ~848x1280) with no border or circle, so it blends into #}
             {# the white page. The "Woof!" onomatopoeia pops near the end of the   #}

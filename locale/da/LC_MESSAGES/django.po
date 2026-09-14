@@ -233,3 +233,8 @@ msgstr "🐾 Tak! Dine oplysninger er på vej til Andrea."
 msgid "Woof… I could not save your details. Please try again."
 msgstr "Vov… jeg kunne ikke gemme dine oplysninger. Prøv venligst igen."
 
+# --- Cited sources (v0.4) -------------------------------------------------
+
+msgid "Sources"
+msgstr "Kilder"
+

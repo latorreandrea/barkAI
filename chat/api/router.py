@@ -36,6 +36,7 @@ def _serialize_message(message: ChatMessage) -> MessageOut:
         id=message.id,
         sender=message.sender,
         content=message.content,
+        sources=message.sources or [],
         created_at=message.created_at,
     )
 
@@ -119,11 +120,13 @@ def send_message(request, payload: SendIn) -> BarkleyOut:
     # 3) Ask the agent service for Barkley's reply.
     result = generate_reply(payload.message, history)
 
-    # 4) Persist Barkley's reply.
+    # 4) Persist Barkley's reply (with the sources it cited, so the citations
+    #    survive a page reload and stay visible in the history).
     ChatMessage.objects.create(
         session=session,
         sender=ChatMessage.Sender.ASSISTANT,
         content=result.reply,
+        sources=list(result.sources),
     )
 
     # 5) Flag the session when an interview was requested; bump last_active.
@@ -149,6 +152,7 @@ def send_message(request, payload: SendIn) -> BarkleyOut:
         barkley_state=result.barkley_state,
         interview_requested=session.interview_requested,
         suggest_questions=result.suggest_questions,
+        sources=list(result.sources),
     )
 
 

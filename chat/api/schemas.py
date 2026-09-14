@@ -12,6 +12,8 @@ class MessageOut(Schema):
     id: int
     sender: str  # "user" | "assistant"
     content: str
+    # Knowledge-base labels BarklAI cited (always empty on a user turn).
+    sources: list[str] = []
     created_at: datetime
 
 
@@ -44,6 +46,9 @@ class BarkleyOut(Schema):
     # True when the agent thinks the recruiter is unsure what to ask, so the UI
     # can offer the quick-question chips inside the speech bubble.
     suggest_questions: bool = False
+    # Knowledge-base labels the reply is grounded in (already validated against
+    # the retrieved chunks, so an invented label can never appear here).
+    sources: list[str] = []
 
 
 class ContactIn(Schema):

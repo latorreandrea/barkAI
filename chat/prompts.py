@@ -54,6 +54,19 @@ GROUNDING_RULES = (
     "is that Andrea is eligible to work in Denmark."
 )
 
+# Citations: the model may only name labels retrieval actually returned. The
+# allowed list is injected as a "CITABLE SOURCES" block and validated again
+# server-side (see chat/services.py:_sanitize_sources), so a fabricated label
+# can never reach the recruiter.
+SOURCES_RULES = (
+    "SOURCES: when your answer uses facts from the citable sources listed "
+    'below, name them in the "sources" field of the JSON using their EXACT '
+    "labels. Never invent a label and never cite one you did not use; if you "
+    "answered from the career profile or the conversation alone, return an "
+    'empty array. Do not list the labels inside "reply" - the interface shows '
+    "them separately."
+)
+
 # Used when the knowledge base is empty.
 NO_KNOWLEDGE = (
     "The knowledge base is currently empty: answer from your persona and the "
@@ -74,7 +87,9 @@ OUTPUT_CONTRACT = (
     "company, so Andrea can follow up with them.\n"
     '  - "suggest_questions": boolean. true when the recruiter seems unsure '
     "what to ask (e.g. \"I don't know what to ask\", \"what do you suggest?\"), "
-    "so the UI can offer quick-question chips; otherwise false."
+    "so the UI can offer quick-question chips; otherwise false.\n"
+    '  - "sources": array of strings. The exact labels from the CITABLE '
+    "SOURCES list that supported the answer; an empty array when none was used."
 )
 
 
@@ -88,12 +103,33 @@ def language_name(code: str | None) -> str:
     return LANGUAGE_NAMES.get(primary, "English")
 
 
-def build_system_prompt(knowledge: str = "", language: str = "en") -> str:
-    """Compose the system prompt, embedding the knowledge base when present."""
+def citable_sources_block(sources: list[str] | None) -> str:
+    """The exact labels the model may cite, or an explicit "none available"."""
+    if not sources:
+        return (
+            "CITABLE SOURCES: none available for this answer, so return an empty "
+            '"sources" array.'
+        )
+    labels = "\n".join(f"- {label}" for label in sources)
+    return (
+        'CITABLE SOURCES - the only labels you may put in "sources", spelled '
+        f"exactly as here and never invented:\n{labels}"
+    )
+
+
+def build_system_prompt(
+    knowledge: str = "", language: str = "en", sources: list[str] | None = None
+) -> str:
+    """Compose the system prompt, embedding the knowledge base when present.
+
+    ``sources`` are the knowledge-base labels retrieval actually returned; they
+    are the only values allowed in the JSON ``sources`` field.
+    """
     parts = [
         PERSONA,
         LANGUAGE_RULES.format(language=language_name(language)),
         GROUNDING_RULES,
+        SOURCES_RULES,
     ]
     if knowledge.strip():
         parts.append(
@@ -102,5 +138,6 @@ def build_system_prompt(knowledge: str = "", language: str = "en") -> str:
         )
     else:
         parts.append(NO_KNOWLEDGE)
+    parts.append(citable_sources_block(sources))
     parts.append(OUTPUT_CONTRACT)
     return "\n\n".join(parts)

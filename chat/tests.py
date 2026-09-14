@@ -17,6 +17,7 @@ from django.utils import timezone
 from django.views import defaults
 
 from chat.embeddings import EmbeddingError
+from chat.evals import evaluate_case, load_golden_set, validate_golden_set
 from chat.interviews import capture_interview_request, mark_notified
 from chat.models import (
     ChatMessage,
@@ -29,6 +30,8 @@ from chat.prompts import build_system_prompt
 from chat.services import (
     FALLBACK_NO_KEY,
     FALLBACK_UNREACHABLE,
+    BarkleyResponse,
+    _sanitize_sources,
     detect_language,
     generate_reply,
     get_knowledge_text,
@@ -702,6 +705,170 @@ class ChatGuardrailTests(TestCase):
                 self.SEND_URL, data=payload, content_type="application/json"
             )
             self.assertEqual(response.status_code, 200)
+
+
+class GoldenSetEvalTests(TestCase):
+    """The golden-set file and its evaluator: offline, no model calls."""
+
+    def test_golden_set_is_well_formed(self):
+        self.assertEqual(validate_golden_set(load_golden_set()), [])
+
+    def test_check_only_command_passes(self):
+        call_command("eval_agent", "--check-only", verbosity=0)
+
+    def test_check_only_rejects_a_broken_set(self):
+        problems = validate_golden_set(
+            {
+                "cases": [
+                    {"id": "x", "language": "en", "question": "Q"},
+                    {"id": "x", "language": "fr", "question": ""},
+                ]
+            }
+        )
+        self.assertTrue(any("duplicate id" in problem for problem in problems))
+        self.assertTrue(any("'language'" in problem for problem in problems))
+        self.assertTrue(any("empty 'question'" in problem for problem in problems))
+        self.assertTrue(
+            any("needs at least one expectation" in problem for problem in problems)
+        )
+        self.assertTrue(any("no Danish case" in problem for problem in problems))
+
+    def test_golden_set_covers_both_languages(self):
+        languages = {case["language"] for case in load_golden_set()["cases"]}
+        self.assertEqual(languages, {"en", "da"})
+
+    def test_evaluator_flags_language_forbidden_words_and_the_flag(self):
+        case = {
+            "id": "t",
+            "language": "da",
+            "must_contain": ["django"],
+            "must_contain_any": ["postgresql", "postgres"],
+            "must_not_contain": ["cpr"],
+            "interview_requested": False,
+        }
+        reasons = evaluate_case(
+            case,
+            reply="Sure, he used Django, PostgreSQL and his CPR number.",
+            interview_requested=True,
+            detected_language="en",
+        )
+        joined = " | ".join(reasons)
+        self.assertIn("language", joined)
+        self.assertIn("forbidden", joined)
+        self.assertIn("interview_requested", joined)
+
+    def test_evaluator_passes_a_good_reply(self):
+        case = {
+            "id": "t",
+            "language": "da",
+            "must_contain": ["django"],
+            "must_contain_any": ["postgresql", "postgres"],
+            "must_not_contain": ["cpr"],
+            "interview_requested": False,
+        }
+        self.assertEqual(
+            evaluate_case(
+                case,
+                reply="Voff! Andrea har arbejdet med Django og PostgreSQL.",
+                interview_requested=False,
+                detected_language="da",
+            ),
+            [],
+        )
+
+    def test_evaluator_reports_a_missing_required_fact(self):
+        case = {"id": "t", "language": "en", "must_contain": ["bigquery"]}
+        reasons = evaluate_case(
+            case,
+            reply="Woof! He worked with Django.",
+            interview_requested=False,
+            detected_language="en",
+        )
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("missing", reasons[0])
+
+
+class SourceCitationTests(TestCase):
+    """Citations: the model proposes labels, the server validates them."""
+
+    def test_sanitizer_keeps_only_retrieved_labels(self):
+        allowed = ["latorreandrea/barkAI", "latorreandrea/fiestapa"]
+        kept = _sanitize_sources(
+            ["latorreandrea/barkAI", "latorreandrea/invented", " Fiestapa "],
+            allowed,
+        )
+        # The invented label is dropped, the case difference is normalised, and
+        # the canonical spelling of the allowed label is preserved.
+        self.assertEqual(kept, ("latorreandrea/barkAI", "latorreandrea/fiestapa"))
+
+    def test_sanitizer_drops_everything_without_a_retrieved_list(self):
+        self.assertEqual(_sanitize_sources(["latorreandrea/barkAI"], []), ())
+        self.assertEqual(_sanitize_sources("not-a-list", ["repo/a"]), ())
+
+    @override_settings(GROQ_API_KEY="test-key")
+    @patch(
+        "chat.services._knowledge_for_prompt",
+        return_value=("ground truth", ["repo/a"]),
+    )
+    @patch(
+        "chat.services._call_groq",
+        return_value=json.dumps(
+            {
+                "reply": "Woof! Grounded facts.",
+                "interview_requested": False,
+                "suggest_questions": False,
+                "sources": ["repo/a", "repo/invented"],
+            }
+        ),
+    )
+    def test_invented_citations_never_reach_the_caller(self, _call, _knowledge):
+        result = generate_reply("Tell me about repo a")
+        self.assertEqual(result.sources, ("repo/a",))
+
+    def test_citable_sources_block_lists_the_labels(self):
+        prompt = build_system_prompt("facts", "en", ["repo/a", "repo/b"])
+        self.assertIn("CITABLE SOURCES", prompt)
+        self.assertIn("- repo/a", prompt)
+        self.assertIn("- repo/b", prompt)
+
+    def test_no_sources_prompt_asks_for_an_empty_list(self):
+        prompt = build_system_prompt("facts", "en", [])
+        self.assertIn("none available", prompt)
+
+    @override_settings(GROQ_API_KEY="")
+    def test_api_returns_and_persists_the_citations(self):
+        session_id = uuid4()
+        with patch(
+            "chat.api.router.generate_reply",
+            return_value=BarkleyResponse(
+                reply="Woof! Grounded answer.",
+                barkley_state="speaking",
+                interview_requested=False,
+                sources=("latorreandrea/barkAI",),
+            ),
+        ):
+            response = self.client.post(
+                "/api/chat/send",
+                data=json.dumps({"session_id": str(session_id), "message": "hi"}),
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["sources"], ["latorreandrea/barkAI"])
+
+        session = ChatSession.objects.get(session_id=session_id)
+        assistant = session.messages.get(sender=ChatMessage.Sender.ASSISTANT)
+        self.assertEqual(assistant.sources, ["latorreandrea/barkAI"])
+
+        history = self.client.get(f"/api/chat/history/{session_id}").json()
+        self.assertEqual(history["messages"][-1]["sources"], ["latorreandrea/barkAI"])
+
+    def test_user_turns_carry_no_sources(self):
+        session = ChatSession.objects.create()
+        ChatMessage.objects.create(
+            session=session, sender=ChatMessage.Sender.USER, content="hi"
+        )
+        payload = self.client.get(f"/api/chat/history/{session.session_id}").json()
+        self.assertEqual(payload["messages"][0]["sources"], [])
 
 
 @override_settings(GROQ_API_KEY="")

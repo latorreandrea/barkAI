@@ -135,6 +135,9 @@ class BarkleyResponse:
     barkley_state: str  # One of: "speaking", "celebrating", "searching", "typing".
     interview_requested: bool
     suggest_questions: bool = False
+    # Knowledge-base labels the answer is grounded in, already validated against
+    # the chunks retrieval returned (see _sanitize_sources).
+    sources: tuple[str, ...] = ()
 
 
 def generate_reply(
@@ -155,13 +158,13 @@ def generate_reply(
     ui_language = language or get_language() or "en"
     # The language the recruiter actually wrote in; ``None`` when undecidable.
     expected_language = detect_language(user_message)
-    system_prompt = build_system_prompt(
-        _knowledge_for_prompt(user_message), ui_language
-    )
+    knowledge, allowed_sources = _knowledge_for_prompt(user_message)
+    system_prompt = build_system_prompt(knowledge, ui_language, allowed_sources)
 
     try:
         result = _parse_reply(
-            _call_groq(user_message, history or [], api_key, system_prompt)
+            _call_groq(user_message, history or [], api_key, system_prompt),
+            allowed_sources,
         )
         if _should_retry_for_language(expected_language, result.reply):
             logger.info(
@@ -174,7 +177,8 @@ def generate_reply(
                     history or [],
                     api_key,
                     _correction_prompt(system_prompt, expected_language),
-                )
+                ),
+                allowed_sources,
             )
             if not _should_retry_for_language(expected_language, retry.reply):
                 return retry
@@ -219,20 +223,21 @@ def get_knowledge_text() -> str:
     return "\n\n".join(chunks)[:max_chars]
 
 
-def _knowledge_for_prompt(user_message: str) -> str:
-    """Knowledge text for the system prompt.
+def _knowledge_for_prompt(user_message: str) -> tuple[str, list[str]]:
+    """Knowledge text for the system prompt plus the citable source labels.
 
     With RAG enabled (``RAG_ENABLED=True``) only the chunks that match the
     question are sent; otherwise the whole knowledge base is stuffed in, as a
-    safe fallback for a small corpus.
+    safe fallback for a small corpus — in that case there are no citation labels
+    because no per-chunk retrieval happened.
     """
     if getattr(settings, "RAG_ENABLED", False):
-        from chat.rag import build_retrieved_context
+        from chat.rag import build_retrieved_context_with_sources
 
-        context = build_retrieved_context(user_message)
+        context, sources = build_retrieved_context_with_sources(user_message)
         if context:
-            return context
-    return get_knowledge_text()
+            return context, sources
+    return get_knowledge_text(), []
 
 
 def _call_groq(
@@ -261,8 +266,14 @@ def _call_groq(
     return completion.choices[0].message.content
 
 
-def _parse_reply(raw: str) -> BarkleyResponse:
-    """Turn the model's JSON (tolerantly parsed) into a ``BarkleyResponse``."""
+def _parse_reply(
+    raw: str, allowed_sources: list[str] | None = None
+) -> BarkleyResponse:
+    """Turn the model's JSON (tolerantly parsed) into a ``BarkleyResponse``.
+
+    ``allowed_sources`` are the labels retrieval actually returned; any other
+    label the model invents is dropped by :func:`_sanitize_sources`.
+    """
     data = _loads_json_object(raw)
     reply = str(data.get("reply") or "").strip() or FALLBACK_UNREACHABLE
     interview = bool(data.get("interview_requested"))
@@ -271,7 +282,26 @@ def _parse_reply(raw: str) -> BarkleyResponse:
         barkley_state="celebrating" if interview else "speaking",
         interview_requested=interview,
         suggest_questions=bool(data.get("suggest_questions")),
+        sources=_sanitize_sources(data.get("sources"), allowed_sources or []),
     )
+
+
+def _sanitize_sources(raw, allowed: list[str]) -> tuple[str, ...]:
+    """Keep only the labels that were actually retrieved, in a stable order.
+
+    The same idea as the language guard: the model proposes, the server decides.
+    A cited source that retrieval never returned is dropped rather than shown to
+    a recruiter as evidence.
+    """
+    if not isinstance(raw, list) or not allowed:
+        return ()
+    by_label = {label.lower(): label for label in allowed}
+    kept: list[str] = []
+    for item in raw:
+        label = by_label.get(str(item).strip().lower())
+        if label and label not in kept:
+            kept.append(label)
+    return tuple(kept)
 
 
 def _loads_json_object(raw: str) -> dict:

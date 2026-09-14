@@ -5,7 +5,7 @@
 > `python manage.py sync_knowledge`.
 
 ## Snapshot
-Full-stack developer based in Denmark (**eligible to work — resident with CPR**) with **3 years
+Full-stack developer based in Denmark (**eligible to work in Denmark**) with **3 years
 of experience in the energy sector**: two years building Python data pipelines on **Google Cloud**
 (PostgreSQL → BigQuery) and one as a **project manager** after the company was acquired. I taught
 myself to code in **one year**, working nights as a **warehouse worker** while completing the Code
@@ -135,7 +135,7 @@ tools (*office_pytool* — office automation, *selenium_web_scrapling* — scrap
 - **Looking for:** Python/Django backend, data engineering (ETL/BigQuery, Power BI) and full-stack roles.
 - **Location:** based in Denmark; on-site or hybrid, open to relocation within Denmark.
 - **Start:** available immediately.
-- **Authorisation:** eligible to work in Denmark (resident with CPR) · Italian Category B driving
+- **Authorisation:** eligible to work in Denmark · Italian Category B driving
   licence, valid throughout the EU.
 
 ## Beyond work

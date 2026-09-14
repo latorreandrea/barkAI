@@ -72,6 +72,7 @@
     var contactCompanyEl = document.getElementById("contact-company");
     var contactSaveBtn = document.getElementById("interview-contact-save");
     var contactStatusEl = document.getElementById("interview-contact-status");
+    var sourcesLabelEl = document.getElementById("sources-label");
 
     if (sessionChip) {
         sessionChip.textContent = sessionId.slice(0, 8) + "…";
@@ -131,6 +132,9 @@
     // Text of the BarklAI message currently occupying the bubble. Null means
     // the bubble only shows an idle hint or a transient progress label.
     var activeBubbleText = null;
+    // Knowledge-base labels cited by the utterance above (empty for user turns,
+    // progress labels and greetings).
+    var activeBubbleSources = [];
     var typeTimer = null;
 
     function bubbleIsMessage() {
@@ -155,9 +159,45 @@
         bubbleScrollEl.scrollTop = bubbleScrollEl.scrollHeight;
     }
 
+    // Translated label for the citation chips ("Sources" / "Kilder"), read from
+    // the template so the string lives in the Django catalogue.
+    function sourcesLabel() {
+        return sourcesLabelEl ? sourcesLabelEl.getAttribute("data-label") || "" : "";
+    }
+
+    // A discreet "Sources: <label> <label>" line, or null when there is none.
+    // Labels are inserted with textContent, so they cannot inject HTML.
+    function buildSourcesLine(sources) {
+        if (!sources || !sources.length) {
+            return null;
+        }
+        var line = document.createElement("p");
+        line.className = "sources-line";
+        var label = document.createElement("span");
+        label.className = "sources-label";
+        label.textContent = sourcesLabel();
+        line.appendChild(label);
+        sources.forEach(function (source) {
+            var chip = document.createElement("span");
+            chip.className = "sources-chip";
+            chip.textContent = source;
+            line.appendChild(chip);
+        });
+        return line;
+    }
+
+    function appendSourcesToBubble(sources) {
+        var line = buildSourcesLine(sources);
+        if (line) {
+            bubbleTextEl.appendChild(line);
+            bubbleScrollEl.scrollTop = bubbleScrollEl.scrollHeight;
+        }
+    }
+
     // Idle placeholder shown while there is nothing live to say yet.
     function showBubbleIdle() {
         activeBubbleText = null;
+        activeBubbleSources = [];
         setBubbleContent(document.createTextNode(STATES.idle), true);
     }
 
@@ -178,11 +218,12 @@
 
     // Print a BarklAI message into the bubble word by word (typewriter fade).
     // Words are inserted with textContent inside <span>s => injection-safe.
-    function typeBubbleMessage(text) {
+    function typeBubbleMessage(text, sources) {
         return new Promise(function (resolve) {
             var words = text.split(" ");
             var index = 0;
             activeBubbleText = text;
+            activeBubbleSources = sources || [];
             setBubbleContent(document.createTextNode(""), false);
             if (words.length === 1 && words[0] === "") {
                 resolve();
@@ -195,6 +236,7 @@
                 if (index >= words.length) {
                     window.clearInterval(typeTimer);
                     typeTimer = null;
+                    appendSourcesToBubble(activeBubbleSources);
                     bubbleScrollEl.scrollTop = bubbleScrollEl.scrollHeight;
                     resolve();
                     return;
@@ -217,7 +259,7 @@
         threadEl.scrollTop = threadEl.scrollHeight;
     }
 
-    function addMessageRow(sender, content, animateIn) {
+    function addMessageRow(sender, content, animateIn, sources) {
         var isUser = sender === "user";
         var row = document.createElement("div");
         row.className = "flex " + (isUser ? "justify-end" : "justify-start");
@@ -242,6 +284,11 @@
 
         bubble.appendChild(meta);
         bubble.appendChild(text);
+        // Citations travel with the bubble into the transcript.
+        var sourcesLine = buildSourcesLine(sources);
+        if (sourcesLine) {
+            bubble.appendChild(sourcesLine);
+        }
         row.appendChild(bubble);
         messageListEl.appendChild(row);
         scrollThreadToBottom();
@@ -257,9 +304,11 @@
                 return;
             }
             var text = activeBubbleText;
+            var sources = activeBubbleSources;
             activeBubbleText = null;
+            activeBubbleSources = [];
             bubbleTextEl.classList.add("bubble-msg-leaving");
-            addMessageRow("assistant", text, true);
+            addMessageRow("assistant", text, true, sources);
             window.setTimeout(function () {
                 bubbleTextEl.classList.remove("bubble-msg-leaving");
                 bubbleTextEl.textContent = "";
@@ -740,7 +789,7 @@
             var data = await requestPromise;
             await flushPromise; // Never type the new reply over the old bubble copy.
             setMascotState(data.interview_requested ? "celebrating" : "speaking");
-            await typeBubbleMessage(data.reply);
+            await typeBubbleMessage(data.reply, data.sources);
             // The agent decided the recruiter is unsure: offer quick questions.
             if (data.suggest_questions) {
                 showIdleSuggestions(null);
@@ -784,11 +833,14 @@
 
             // The last assistant reply is the "live" one: park it in the bubble.
             var bubbleContent = null;
+            var bubbleSources = [];
             if (messages.length && messages[messages.length - 1].sender === "assistant") {
-                bubbleContent = messages.pop().content;
+                var lastReply = messages.pop();
+                bubbleContent = lastReply.content;
+                bubbleSources = lastReply.sources || [];
             }
             messages.forEach(function (message) {
-                addMessageRow(message.sender, message.content, false);
+                addMessageRow(message.sender, message.content, false, message.sources);
             });
 
             if (data.messages.length === 0 && !isFirstVisit) {
@@ -796,7 +848,9 @@
                 greetInBubble(REVISITOR_GREETING);
             } else if (bubbleContent !== null) {
                 activeBubbleText = bubbleContent;
+                activeBubbleSources = bubbleSources;
                 setBubbleContent(document.createTextNode(bubbleContent), false);
+                appendSourcesToBubble(bubbleSources);
                 setMascotState(data.interview_requested ? "celebrating" : "idle");
             } else if (!onboardingBusy) {
                 showBubbleIdle();
