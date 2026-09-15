@@ -140,6 +140,42 @@ class BarkleyResponse:
     sources: tuple[str, ...] = ()
 
 
+# The model occasionally answers in prose instead of JSON, which Groq rejects
+# with 400 json_validate_failed. Throwing that text away would lose a perfectly
+# good answer, so the refusal is salvaged (see _salvage_failed_generation).
+_SOURCES_LINE_RE = re.compile(r"^[ \t]*sources?[ \t]*:.*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _salvage_failed_generation(exc: Exception) -> str:
+    """Recover the answer Groq refused to accept in JSON mode.
+
+    Returns the refused text when the error really is a ``json_validate_failed``
+    (Groq embeds it in ``error.failed_generation``), otherwise an empty string.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return ""
+    try:
+        payload = response.json()
+    except Exception:  # noqa: BLE001 - an unusable error body is just "no text"
+        return ""
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict) or error.get("code") != "json_validate_failed":
+        return ""
+    return str(error.get("failed_generation") or "").strip()
+
+
+def _strip_sources_lines(text: str) -> str:
+    """Drop the ``sources: [...]`` line the model sometimes adds to the prose."""
+    return _SOURCES_LINE_RE.sub("", text).strip()
+
+
+def _mentions_interview(text: str) -> bool:
+    """Offline interview heuristic, reused for salvaged prose answers."""
+    lowered = (text or "").lower()
+    return any(hint in lowered for hint in _INTERVIEW_HINTS)
+
+
 def generate_reply(
     user_message: str, history: list[dict] | None = None, language: str | None = None
 ) -> BarkleyResponse:
@@ -161,35 +197,93 @@ def generate_reply(
     knowledge, allowed_sources = _knowledge_for_prompt(user_message)
     system_prompt = build_system_prompt(knowledge, ui_language, allowed_sources)
 
-    try:
-        result = _parse_reply(
-            _call_groq(user_message, history or [], api_key, system_prompt),
+    # Primary model first, then the configured production fallback, so a
+    # decommissioned preview model cannot take the whole chat down.
+    primary_model = getattr(settings, "GROQ_MODEL", "")
+    fallback_model = getattr(settings, "GROQ_MODEL_FALLBACK", "")
+    models = [primary_model]
+    if fallback_model and fallback_model != primary_model:
+        models.append(fallback_model)
+
+    for position, model in enumerate(models):
+        try:
+            return _reply_from_model(
+                user_message,
+                history or [],
+                api_key,
+                system_prompt,
+                allowed_sources,
+                expected_language,
+                model,
+            )
+        except Exception as exc:  # noqa: BLE001 - any failure -> salvage or copy
+            salvaged = _salvage_failed_generation(exc)
+            if salvaged:
+                # The model answered in prose instead of JSON: Groq refused it,
+                # but the answer itself is good (citations stay unknown).
+                logger.warning("Groq rejected the JSON; keeping the prose answer.")
+                reply = _strip_sources_lines(salvaged) or salvaged
+                interview = _mentions_interview(reply)
+                return BarkleyResponse(
+                    reply=reply,
+                    barkley_state="celebrating" if interview else "speaking",
+                    interview_requested=interview,
+                )
+            if position + 1 < len(models):
+                logger.warning(
+                    "Model %s failed (%s); retrying with %s.",
+                    model,
+                    exc,
+                    models[position + 1],
+                )
+                continue
+            logger.exception("Groq request failed: %s", exc)
+            return BarkleyResponse(
+                reply=gettext(FALLBACK_UNREACHABLE),
+                barkley_state="speaking",
+                interview_requested=False,
+            )
+
+    # Unreachable while GROQ_MODEL is set, but kept so the contract is explicit.
+    return BarkleyResponse(
+        reply=gettext(FALLBACK_UNREACHABLE),
+        barkley_state="speaking",
+        interview_requested=False,
+    )
+
+
+def _reply_from_model(
+    user_message: str,
+    history: list[dict],
+    api_key: str,
+    system_prompt: str,
+    allowed_sources: list[str],
+    expected_language: str | None,
+    model: str,
+) -> BarkleyResponse:
+    """One model attempt, including the single language-guard retry."""
+    result = _parse_reply(
+        _call_groq(user_message, history, api_key, system_prompt, model),
+        allowed_sources,
+    )
+    if _should_retry_for_language(expected_language, result.reply):
+        logger.info(
+            "Reply language mismatch (expected %s); asking Groq once more.",
+            expected_language,
+        )
+        retry = _parse_reply(
+            _call_groq(
+                user_message,
+                history,
+                api_key,
+                _correction_prompt(system_prompt, expected_language),
+                model,
+            ),
             allowed_sources,
         )
-        if _should_retry_for_language(expected_language, result.reply):
-            logger.info(
-                "Reply language mismatch (expected %s); asking Groq once more.",
-                expected_language,
-            )
-            retry = _parse_reply(
-                _call_groq(
-                    user_message,
-                    history or [],
-                    api_key,
-                    _correction_prompt(system_prompt, expected_language),
-                ),
-                allowed_sources,
-            )
-            if not _should_retry_for_language(expected_language, retry.reply):
-                return retry
-        return result
-    except Exception as exc:  # noqa: BLE001 - any client/network failure -> copy
-        logger.exception("Groq request failed: %s", exc)
-        return BarkleyResponse(
-            reply=gettext(FALLBACK_UNREACHABLE),
-            barkley_state="speaking",
-            interview_requested=False,
-        )
+        if not _should_retry_for_language(expected_language, retry.reply):
+            return retry
+    return result
 
 
 def _should_retry_for_language(expected: str | None, reply: str) -> bool:
@@ -241,7 +335,11 @@ def _knowledge_for_prompt(user_message: str) -> tuple[str, list[str]]:
 
 
 def _call_groq(
-    user_message: str, history: list[dict], api_key: str, system_prompt: str
+    user_message: str,
+    history: list[dict],
+    api_key: str,
+    system_prompt: str,
+    model: str = "",
 ) -> str:
     """Call Groq in JSON mode and return the raw assistant content."""
     from groq import Groq  # Imported lazily so the mock path needs no SDK.
@@ -257,7 +355,7 @@ def _call_groq(
     messages.append({"role": "user", "content": user_message})
 
     completion = client.chat.completions.create(
-        model=settings.GROQ_MODEL,
+        model=model or settings.GROQ_MODEL,
         messages=messages,
         response_format={"type": "json_object"},
         temperature=settings.GROQ_TEMPERATURE,

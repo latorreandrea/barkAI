@@ -2,13 +2,15 @@
 import base64
 import json
 from datetime import timedelta
+from io import StringIO
 from unittest import skipUnless
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from django.core import mail
 from django.core.cache import cache
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import connection
 from django.http import Http404
 from django.test import RequestFactory, TestCase, override_settings
@@ -481,8 +483,9 @@ class LanguageGuardTests(TestCase):
         result = generate_reply("Hvilke erfaringer har Andrea med Django?")
         self.assertIn("Voff", result.reply)
         self.assertEqual(call.call_count, 2)
-        # The retry prompt must explicitly ask for Danish.
-        self.assertIn("Danish", call.call_args.args[-1])
+        # The retry prompt must explicitly ask for Danish. It is the last system
+        # prompt argument; the model id comes after it.
+        self.assertIn("Danish", call.call_args.args[-2])
 
     @override_settings(GROQ_API_KEY="test-key", AGENT_LANGUAGE_GUARD=True)
     @patch("chat.services._call_groq", side_effect=[ENGLISH_REPLY, ENGLISH_REPLY])
@@ -707,6 +710,59 @@ class ChatGuardrailTests(TestCase):
             self.assertEqual(response.status_code, 200)
 
 
+def _groq_json_error(failed_generation: str) -> Exception:
+    """A ``groq.BadRequestError`` look-alike carrying a refused generation."""
+    error = RuntimeError("Error code: 400 - json_validate_failed")
+    error.response = Mock()
+    error.response.json.return_value = {
+        "error": {
+            "code": "json_validate_failed",
+            "failed_generation": failed_generation,
+        }
+    }
+    return error
+
+
+class JsonModeSalvageTests(TestCase):
+    """A prose answer refused by JSON mode must never be thrown away."""
+
+    @override_settings(GROQ_API_KEY="test-key")
+    @patch("chat.services._call_groq")
+    def test_refused_json_keeps_the_prose_answer(self, call):
+        call.side_effect = _groq_json_error(
+            "Woof! Andrea built Django projects.\nsources: []"
+        )
+        result = generate_reply("Which projects?")
+        self.assertIn("Django projects", result.reply)
+        self.assertNotIn("sources:", result.reply)
+        self.assertEqual(result.sources, ())
+        self.assertNotEqual(result.reply, FALLBACK_UNREACHABLE)
+
+    @override_settings(GROQ_API_KEY="test-key")
+    @patch("chat.services._call_groq")
+    def test_salvaged_prose_still_flags_an_interview_request(self, call):
+        call.side_effect = _groq_json_error("Woof! Sure, let's schedule a call.")
+        result = generate_reply("Can we talk?")
+        self.assertTrue(result.interview_requested)
+        self.assertEqual(result.barkley_state, "celebrating")
+
+    def test_other_errors_are_never_salvaged(self):
+        from chat.services import _salvage_failed_generation
+
+        # No HTTP response at all (network error).
+        self.assertEqual(_salvage_failed_generation(RuntimeError("boom")), "")
+        # A 400 that is not a JSON-mode refusal.
+        error = Mock()
+        error.response.json.return_value = {"error": {"code": "invalid_api_key"}}
+        self.assertEqual(_salvage_failed_generation(error), "")
+
+    def test_sources_lines_are_stripped_from_the_prose(self):
+        from chat.services import _strip_sources_lines
+
+        self.assertEqual(_strip_sources_lines("Woof!\nSources: [repo/a]\n"), "Woof!")
+        self.assertEqual(_strip_sources_lines("Woof! No sources here."), "Woof! No sources here.")
+
+
 class GoldenSetEvalTests(TestCase):
     """The golden-set file and its evaluator: offline, no model calls."""
 
@@ -794,11 +850,11 @@ class SourceCitationTests(TestCase):
     def test_sanitizer_keeps_only_retrieved_labels(self):
         allowed = ["latorreandrea/barkAI", "latorreandrea/fiestapa"]
         kept = _sanitize_sources(
-            ["latorreandrea/barkAI", "latorreandrea/invented", " Fiestapa "],
+            ["latorreandrea/barkAI", "latorreandrea/invented", " LATORREANDREA/FIESTAPA "],
             allowed,
         )
-        # The invented label is dropped, the case difference is normalised, and
-        # the canonical spelling of the allowed label is preserved.
+        # The invented label is dropped, the case/whitespace difference is
+        # normalised, and the canonical spelling of the allowed label is kept.
         self.assertEqual(kept, ("latorreandrea/barkAI", "latorreandrea/fiestapa"))
 
     def test_sanitizer_drops_everything_without_a_retrieved_list(self):
@@ -869,6 +925,149 @@ class SourceCitationTests(TestCase):
         )
         payload = self.client.get(f"/api/chat/history/{session.session_id}").json()
         self.assertEqual(payload["messages"][0]["sources"], [])
+
+
+class KnowledgeStatusCommandTests(TestCase):
+    """The knowledge-base freshness report a scheduled job runs."""
+
+    def _document(self, **overrides):
+        payload = {"kind": "profile", "source": "profile", "content": "x"}
+        payload.update(overrides)
+        return KnowledgeDocument.objects.create(**payload)
+
+    def test_reports_counts_and_a_fresh_base(self):
+        document = self._document()
+        KnowledgeChunk.objects.create(
+            document=document,
+            ordinal=0,
+            content="x",
+            content_hash="h",
+            embedding=[0.0] * 1024,
+        )
+        out = StringIO()
+        call_command("knowledge_status", stdout=out)
+        output = out.getvalue()
+        self.assertIn("Documents: 1", output)
+        self.assertIn("1 embedded, 100%", output)
+        self.assertIn("Fresh: nothing to do.", output)
+
+    def test_unembedded_chunks_are_flagged(self):
+        document = self._document()
+        KnowledgeChunk.objects.create(
+            document=document, ordinal=0, content="x", content_hash="h"
+        )
+        out = StringIO()
+        call_command("knowledge_status", stdout=out)
+        self.assertIn("not embedded", out.getvalue())
+
+        with self.assertRaises(CommandError):
+            call_command("knowledge_status", "--fail-on-stale", stdout=StringIO())
+
+    def test_stale_document_is_reported(self):
+        document = self._document(source="o/r", kind="github_readme")
+        KnowledgeDocument.objects.filter(pk=document.pk).update(
+            fetched_at=timezone.now() - timedelta(days=90)
+        )
+        out = StringIO()
+        call_command("knowledge_status", "--days", "30", stdout=out)
+        output = out.getvalue()
+        self.assertIn("Stale:", output)
+        self.assertIn("sync_knowledge", output)
+
+    def test_fail_on_stale_exits_non_zero(self):
+        document = self._document()
+        KnowledgeDocument.objects.filter(pk=document.pk).update(
+            fetched_at=timezone.now() - timedelta(days=90)
+        )
+        with self.assertRaises(CommandError):
+            call_command(
+                "knowledge_status",
+                "--days",
+                "30",
+                "--fail-on-stale",
+                stdout=StringIO(),
+            )
+
+    def test_empty_knowledge_base_is_an_error(self):
+        with self.assertRaises(CommandError):
+            call_command("knowledge_status", stdout=StringIO())
+
+
+class ModelFallbackTests(TestCase):
+    """A decommissioned primary model must not take the whole chat down."""
+
+    JSON_REPLY = json.dumps(
+        {
+            "reply": "Woof! Still here.",
+            "interview_requested": False,
+            "suggest_questions": False,
+        }
+    )
+
+    @override_settings(
+        GROQ_API_KEY="test-key",
+        GROQ_MODEL="primary-model",
+        GROQ_MODEL_FALLBACK="fallback-model",
+    )
+    @patch(
+        "chat.services._call_groq",
+        side_effect=[RuntimeError("model_not_found"), JSON_REPLY],
+    )
+    def test_fallback_model_answers_when_the_primary_fails(self, call):
+        result = generate_reply("What projects has Andrea built?")
+        self.assertEqual(result.reply, "Woof! Still here.")
+        self.assertEqual(call.call_count, 2)
+        self.assertEqual(call.call_args.args[-1], "fallback-model")
+
+    @override_settings(
+        GROQ_API_KEY="test-key",
+        GROQ_MODEL="primary-model",
+        GROQ_MODEL_FALLBACK="fallback-model",
+    )
+    @patch("chat.services._call_groq", return_value=JSON_REPLY)
+    def test_no_fallback_when_the_primary_answers(self, call):
+        generate_reply("What projects has Andrea built?")
+        self.assertEqual(call.call_count, 1)
+        self.assertEqual(call.call_args.args[-1], "primary-model")
+
+    @override_settings(
+        GROQ_API_KEY="test-key",
+        GROQ_MODEL="primary-model",
+        GROQ_MODEL_FALLBACK="primary-model",
+    )
+    @patch("chat.services._call_groq", side_effect=RuntimeError("boom"))
+    def test_identical_fallback_is_never_retried(self, call):
+        result = generate_reply("anything")
+        self.assertEqual(call.call_count, 1)
+        self.assertEqual(result.reply, FALLBACK_UNREACHABLE)
+
+    @override_settings(
+        GROQ_API_KEY="test-key", GROQ_MODEL="primary-model", GROQ_MODEL_FALLBACK=""
+    )
+    @patch("chat.services._call_groq", side_effect=RuntimeError("boom"))
+    def test_fallback_can_be_disabled(self, call):
+        generate_reply("anything")
+        self.assertEqual(call.call_count, 1)
+
+
+class HealthzTests(TestCase):
+    """The platform probe: cheap, boring, and honest about the database."""
+
+    def test_healthz_reports_ok(self):
+        response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["database"])
+        self.assertEqual(payload["indexed_chunks"], 0)
+
+    def test_healthz_reports_503_when_the_database_is_down(self):
+        with patch("barkai.views.connection.cursor", side_effect=RuntimeError("no db")):
+            response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 503)
+        payload = response.json()
+        self.assertEqual(payload["status"], "degraded")
+        self.assertFalse(payload["database"])
 
 
 @override_settings(GROQ_API_KEY="")

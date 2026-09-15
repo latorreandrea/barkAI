@@ -59,12 +59,10 @@ GROUNDING_RULES = (
 # server-side (see chat/services.py:_sanitize_sources), so a fabricated label
 # can never reach the recruiter.
 SOURCES_RULES = (
-    "SOURCES: when your answer uses facts from the citable sources listed "
-    'below, name them in the "sources" field of the JSON using their EXACT '
-    "labels. Never invent a label and never cite one you did not use; if you "
-    "answered from the career profile or the conversation alone, return an "
-    'empty array. Do not list the labels inside "reply" - the interface shows '
-    "them separately."
+    'CITATIONS: fill the JSON "sources" array with the exact labels of the '
+    "citable sources your answer relies on. Never invent a label and never cite "
+    "one you did not use; use an empty array when the career profile or the "
+    "conversation was enough. Add no sources text anywhere else in the answer."
 )
 
 # Used when the knowledge base is empty.

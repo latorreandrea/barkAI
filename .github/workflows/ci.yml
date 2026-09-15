@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests + production checks
+    runs-on: ubuntu-latest
+    env:
+      # The suite mocks Groq/Cloudflare and runs on SQLite, so no secret is needed.
+      DEBUG: "True"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile the translation catalogues
+        run: python scripts/compile_messages.py
+
+      - name: Validate the golden set (offline)
+        run: python manage.py eval_agent --check-only
+
+      - name: Run the test suite
+        run: python manage.py test chat
+
+      - name: Deployment checks
+        # DEBUG off + a dummy DATABASE_URL: the app refuses to boot without one,
+        # and every security warning must be clean (see the Security section).
+        env:
+          DEBUG: "False"
+          SECRET_KEY: "ci-only-secret-key-not-used-anywhere-0123456789abcdefghij"
+          ALLOWED_HOSTS: "barkai.example.com"
+          DATABASE_URL: "postgresql://ci:ci@127.0.0.1:5432/ci"
+        run: python manage.py check --deploy
+
+  static:
+    name: Compiled CSS is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run css:build
+
+      - name: Fail when the committed stylesheet is stale
+        # New Tailwind classes used in a template but missing from the committed
+        # barkai.css would silently render unstyled in production.
+        run: git diff --exit-code -- static/css/barkai.css

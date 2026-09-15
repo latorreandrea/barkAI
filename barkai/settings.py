@@ -91,6 +91,10 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # WhiteNoise serves the collected static files from the app process itself,
+    # so one Cloud Run service is enough (no bucket/CDN required). It must sit
+    # directly after SecurityMiddleware to short-circuit static requests early.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     # LocaleMiddleware must sit after SessionMiddleware (it reads the session
     # language) and before CommonMiddleware (it rewrites the request path).
@@ -204,6 +208,16 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 # Target directory for `python manage.py collectstatic` in production.
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# Static file storage. The *Compressed* (not Manifest) WhiteNoise backend is used
+# on purpose: without a manifest, `{% static %}` keeps resolving even before
+# `collectstatic` has run, which keeps local development and the test suite happy.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
+# Immutable assets are served with a one-year cache header.
+WHITENOISE_MAX_AGE = env_int("WHITENOISE_MAX_AGE", 31536000)
+
 # --- CORS (django-cors-headers) -------------------------------------------
 CORS_ALLOWED_ORIGINS = env_csv("CORS_ALLOWED_ORIGINS")
 
@@ -284,6 +298,35 @@ CHAT_RATE_LIMIT_WINDOW_SECONDS = env_int("CHAT_RATE_LIMIT_WINDOW_SECONDS", 300)
 # Retry once when the model answers in a different language from the question
 # (the "Danish question, English answer" regression — see chat/services.py).
 AGENT_LANGUAGE_GUARD = env_bool("AGENT_LANGUAGE_GUARD", default="True")
+# Model used when the primary one fails (decommissioned preview model, 400/404):
+# a *production* Groq model, so a deprecation cannot take the whole chat down.
+GROQ_MODEL_FALLBACK = env_str("GROQ_MODEL_FALLBACK", "llama-3.3-70b-versatile")
+
+# --- Production security --------------------------------------------------
+# Every flag is env-driven and defaults to "safe once DEBUG is off", so a
+# production deployment gets HTTPS enforcement for free while local development
+# stays plain HTTP on localhost. `python manage.py check --deploy` is the
+# sanity check: it should report no warnings with DEBUG=False and these set.
+SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", default=str(not DEBUG))
+SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", default=str(not DEBUG))
+CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", default=str(not DEBUG))
+# HSTS: a year, and only meaningful once HTTPS is guaranteed end to end.
+SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 0 if DEBUG else 31536000)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool(
+    "SECURE_HSTS_INCLUDE_SUBDOMAINS", default=str(not DEBUG)
+)
+# Preload adds the directive to the HSTS header; the domain is only actually
+# preloaded if it is submitted at hstspreload.org, so enabling it with DEBUG off
+# is harmless and makes `check --deploy` clean. Set it to False if you never
+# intend to submit.
+SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", default=str(not DEBUG))
+SECURE_REFERRER_POLICY = env_str("SECURE_REFERRER_POLICY", "same-origin")
+# Managed platforms (Cloud Run, Heroku, Fly) terminate TLS and forward the
+# scheme, so Django has to be told to trust that header.
+if env_bool("TRUST_PROXY_SSL_HEADER", default="False"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# Origins allowed to send POSTs (comma-separated), e.g. the custom domain.
+CSRF_TRUSTED_ORIGINS = env_csv("CSRF_TRUSTED_ORIGINS")
 
 # --- Privacy / GDPR -------------------------------------------------------
 # Conversations older than this many days are purged by
@@ -291,6 +334,11 @@ AGENT_LANGUAGE_GUARD = env_bool("AGENT_LANGUAGE_GUARD", default="True")
 SESSION_RETENTION_DAYS = env_int("SESSION_RETENTION_DAYS", 90)
 # Address shown in the privacy notice for data-subject requests.
 PRIVACY_CONTACT_EMAIL = env_str("PRIVACY_CONTACT_EMAIL", "latorre.andrea.93@gmail.com")
+
+# Knowledge ingestion from GitHub (see `python manage.py sync_knowledge`).
+# How old a knowledge document may be before `knowledge_status --fail-on-stale`
+# (and the scheduled job that runs it) starts complaining.
+KNOWLEDGE_STALE_DAYS = env_int("KNOWLEDGE_STALE_DAYS", 30)
 
 # Knowledge ingestion from GitHub (see `python manage.py sync_knowledge`).
 GITHUB_USERNAME = env_str("GITHUB_USERNAME", "")

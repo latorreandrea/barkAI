@@ -23,6 +23,15 @@ Powered by a Retrieval-Augmented Generation (RAG) pipeline, BarkAI indexes open-
   - [Grounded answers](#grounded-answers)
   - [Interview hand-off](#interview-hand-off)
   - [Abuse protection](#abuse-protection)
+- [Agent Quality (v0.4)](#agent-quality-v04)
+  - [Evaluation suite (golden set)](#evaluation-suite-golden-set)
+  - [Cited sources](#cited-sources)
+  - [Knowledge freshness](#knowledge-freshness)
+- [Production Readiness (v0.4)](#production-readiness-v04)
+  - [Security flags and HTTPS](#security-flags-and-https)
+  - [Health check](#health-check)
+  - [Runtime: gunicorn + WhiteNoise](#runtime-gunicorn--whitenoise)
+  - [Continuous integration](#continuous-integration)
 - [Architecture](#architecture)
   - [System Overview](#system-overview)
   - [Technology Stack](#technology-stack)
@@ -142,7 +151,7 @@ Danish question retrieve English project READMEs.
 8. **BarklAI reaction clips** — `idle`, `sniffing`, `searching`, `typing`, `speaking` and `celebrating` MP4s under `static/mascot/` drive the mascot animation, with an emoji fallback when a clip is missing.
 9. **Custom error pages** — project-level `403`, `404` and `500` templates.
 10. **Environment-driven settings** — values read from the environment only (python-dotenv is intentionally not used); blank values fall back to safe defaults, and `DEBUG` defaults to `True` for a frictionless local start.
-11. **Automated tests** — index view, chat REST API, the agent service (Groq mocked, no network), the knowledge sync + indexing commands, the i18n switching, the interview hand-off + notifications, the guardrails and the GDPR surface (**65 tests**; the pgvector round-trip runs only on PostgreSQL).
+11. **Automated tests** — index view, chat REST API, the agent service (Groq mocked, no network), the knowledge sync + indexing commands, the i18n switching, the interview hand-off + notifications, the guardrails, the citation plumbing, the golden-set evaluator and the GDPR surface (**88 tests**; the pgvector round-trip runs only on PostgreSQL).
 12. **Retrieval-augmented answers (RAG)** — the knowledge base is chunked and embedded (`KnowledgeChunk` + **pgvector**). With `RAG_ENABLED=True` only the most relevant chunks (native `<=>` cosine distance on PostgreSQL) are sent to the model; the curated **career profile is always injected verbatim** and kept out of the similarity search (see below), so it cannot crowd the project chunks out of the prompt. Without RAG the whole corpus is stuffed into the prompt as a fallback.
 13. **Bilingual UI and agent (EN/DA)** — Django i18n (`{% trans %}` + `JavaScriptCatalog`) with `Accept-Language` detection and a navbar toggle; the agent answers in the recruiter's language, enforced by a detect-and-retry **language guard** (see [Language parity](#language-parity-en-and-da)).
 14. **GDPR-ready** — a plain-language privacy notice (EN/DA), one-click **erasure** of the conversation (`POST /session/delete/`), a retention job (`purge_old_sessions`) and the full processing register inline in [Privacy & GDPR](#privacy--gdpr).
@@ -150,12 +159,24 @@ Danish question retrieve English project READMEs.
 16. **Interview notification email** — `chat/notifications.py` emails Andrea the recruiter's details (SMTP through `EMAIL_BACKEND`) and stamps `notified_at`. The send is **idempotent**, never raises into the request cycle, and `retry_interview_notifications` recovers whatever is still pending.
 17. **Public-endpoint guardrails** — a message length cap plus fixed-window rate limiting per session and per IP (`chat/throttle.py`), so a public LLM endpoint cannot be trivially drained.
 18. **SMTP self-check** — `python manage.py send_test_email` proves the mail configuration (e.g. a Gmail app password) before you trust the notifications.
+19. **Golden-set evaluation** — a curated, versioned set of recruiter questions (EN + DA) is scored against the live agent by `python manage.py eval_agent`, which exits non-zero when a case fails (see [Evaluation suite](#evaluation-suite-golden-set)).
+20. **Cited sources** — answers name the project READMEs they rely on (`SOURCES_RULES` + server-side validation), the citations are stored on the message and rendered as chips under the reply (see [Cited sources](#cited-sources)).
+21. **Knowledge freshness** — `python manage.py knowledge_status` reports coverage and staleness (and can fail a scheduled job), so a README change cannot silently fail to reach the agent.
+22. **Model fallback** — if the primary Groq model fails (a decommissioned *preview* model, a 400/404), the same request is retried once on `GROQ_MODEL_FALLBACK` (a production model) before giving up.
+23. **Production security by default** — with `DEBUG=False` the app enforces HTTPS (`SECURE_SSL_REDIRECT`, HSTS, secure session/CSRF cookies) from environment-driven flags, and `python manage.py check --deploy` is clean (see [Production Readiness](#production-readiness-v04)).
+24. **Deployable runtime** — `gunicorn` + **WhiteNoise** serve the app *and* the static files from one container, with `/healthz` as the platform probe and a GitHub Actions workflow running the tests plus `check --deploy` on every push.
 
 ### Roadmap
 
+- **Deferred to after the first deploy** (agreed scope, tracked here so it is not lost):
+  - **Stream** the model's tokens into the speech bubble (SSE) instead of waiting for the full reply.
+  - Send the recruiter a **confirmation email** (and optionally a booking link) so the interview loop closes on both sides.
+  - A **Dockerfile** (the deploy target is Google Cloud Run) and a `Makefile` for the long local commands.
+  - **SEO**: `sitemap.xml`, `robots.txt`, Open Graph / Twitter-card metadata and a real OG image.
+- **Latency**: answers were measured between ~2 s and ~38 s (mean ~25 s) with the current *preview* reasoning model. Switch to a faster **production** model and/or lower `GROQ_MAX_TOKENS`; SSE then hides what remains.
 - Add **push** (browser/Slack) notifications next to the email, and move the send to a background task queue so no interview turn ever waits on SMTP.
-- **Stream** the model's tokens into the speech bubble (SSE) instead of waiting for the full reply.
 - Add an **HNSW index** on `KnowledgeChunk.embedding` once the corpus grows.
+- `eval_agent --repeat N`: the persona is creative at `temperature=0.5`, so a wording-sensitive case can flake; repeating a case would make the score steadier.
 - Replace the placeholder mascot MP4s with real BarklAI footage.
 - Serve production static files via `collectstatic` + WhiteNoise/CDN (the frontend is already compiled and minified).
 - Fine-tune the persona prompt and add more per-state reactions.
@@ -165,9 +186,9 @@ Danish question retrieve English project READMEs.
 ## Agent Hardening (v0.4)
 
 > The v0.3 agent was tested live (real Groq + Neon + Cloudflare) instead of only through mocks. That
-> probe exposed three defects that made the Danish market and the interview hand-off unreliable. This
-> section documents each one, how it was found and how it is fixed — the same three are tracked as
-> ✅ rows in the [Bug Log](#bug-log).
+> probe exposed two real defects that made the Danish market and the interview hand-off unreliable —
+> and one diagnosis of mine that turned out to be wrong. This section documents each one, how it was
+> found and how it is fixed; all of it is tracked in the [Bug Log](#bug-log).
 
 ### Language parity (EN and DA)
 
@@ -199,19 +220,27 @@ with Groq down, a Danish recruiter was never flagged.
 
 ### Grounded answers
 
-A live probe showed the agent adding **Firestore, Cloud Build and Secret Manager** to Andrea's Google
-Cloud experience — none of which appear anywhere in the knowledge base (verified with `grep` across
-`chat/knowledge/` and all 21 synced READMEs). The persona's "never invent facts" was too soft, so it
-became an explicit `GROUNDING_RULES` block:
+The persona's original "never invent facts" was too soft, so it became an explicit `GROUNDING_RULES`
+block:
 
 * mention only skills, services, employers and numbers that appear in the ground truth;
 * never add a plausible-sounding extra — say what is missing and offer the closest fact that *is* there;
-* never quote or allude to personal identifiers. The CPR number appears in the profile only as
-  authorisation, and the model used to echo it ("resident with CPR"); it may now state only that Andrea
-  is eligible to work in Denmark.
+* never quote or allude to personal identifiers.
 
-The honest-answer behaviour was already good and is now regression-tested: *"Does Andrea have
-experience with Kubernetes, Terraform and Rust?"* gets a clear, grounded **no**.
+The rules were added after a *misdiagnosis* worth recording: I first flagged the agent for naming
+**Firestore, Cloud Build and Secret Manager**, having grepped only the local files — but those services
+are real project technology from the `aura-visual` and `django-cloud-ecommerce` READMEs, i.e. inside
+the knowledge base. The withdrawal is tracked as B-003 in the [Bug Log](#bug-log), and it is why the
+[evaluation suite](#evaluation-suite-golden-set) now insists that a `must_not_contain` term be verified
+**absent from the corpus** before it is trusted.
+
+The one real leak the rules did fix was the **CPR reference** (B-004): the curated profile itself
+claimed "resident with CPR" while instructing the agent never to share identifiers. Fixing the prompt
+was not enough — the ground truth had to stop volunteering it, so the profile now states only that
+Andrea is eligible to work in Denmark, and three golden-set cases assert that `cpr` never appears.
+
+The honest-answer behaviour is regression-tested: *"Does Andrea have experience with Kubernetes,
+Terraform and Rust?"* gets a clear, grounded **no**.
 
 ### Interview hand-off
 
@@ -275,6 +304,193 @@ python manage.py retry_interview_notifications --dry-run
 
 > Best-effort by design: without a shared cache the window is per worker. It stops a script, not a
 > botnet — a Cloudflare/WAF rule is the next step in production.
+
+### Model fallback
+
+The primary model is a Groq **preview** model (`qwen/qwen3.8-27b` at the time of writing), and Groq explicitly
+warns that preview models "may be discontinued at short notice". A deprecation would have turned every answer into
+"I lost the scent of my Groq brain", so `generate_reply()` now walks a short model list:
+
+```
+GROQ_MODEL (preview)  ──fails──▶  GROQ_MODEL_FALLBACK (production: llama-3.3-70b-versatile)  ──▶ friendly copy
+        │
+        └── succeeds ▶ answer
+```
+
+* Exactly **one** retry, and never on the same model twice (setting both variables to the same value disables it).
+* A `json_validate_failed` refusal is *not* retried on the fallback: the prose is salvaged instead, because the
+  answer itself is fine (see B-005 in the [Bug Log](#bug-log)).
+* The language guard still runs per attempt, so a fallback model gets the same correction chance.
+
+---
+
+## Agent Quality (v0.4)
+
+> The hardening above stopped the agent being *wrong*. This section is about knowing whether it is
+> *still right*: a scored evaluation set, citations the recruiter can sanity-check, and a freshness
+> report for the corpus it answers from. It exists because two of my own earlier diagnoses turned out
+> to be wrong (see the [Bug Log](#bug-log)) — a handful of manual probes is not evidence.
+
+### Evaluation suite (golden set)
+
+`chat/evals/golden_set.json` is a curated, versioned set of **19 recruiter questions (10 English,
+9 Danish)** carrying the facts each answer must contain, the claims it must never make, the expected
+language and the expected interview flag.
+
+```bash
+python manage.py eval_agent --check-only   # validate the file: no model, no API key
+python manage.py eval_agent                # score a live run (needs GROQ_API_KEY)
+python manage.py eval_agent --only da-     # subset by id prefix
+python manage.py eval_agent --verbose      # print every reply next to its result
+```
+
+The command prints PASS/FAIL per case with the reason and a final score, then **exits non-zero when
+anything failed** — so it can gate a release the way the test suite gates a commit. Expectation
+fields (matching is case-insensitive):
+
+| Field | Meaning |
+| --- | --- |
+| `must_contain` | every string must appear |
+| `must_contain_any` | at least one alternative must appear |
+| `must_not_contain` | none may appear — for claims that must never be made (personal identifiers, invented technologies, off-topic content) |
+| `language` | the reply must be detected in this language |
+| `interview_requested` | the structured flag must match |
+
+The first scored run came out at **14/19**, and the failures were worth more than the score: three
+were real (the agent echoed a CPR reference the profile should never have contained) and two were
+**my expectations being wrong**. A `must_not_contain` term must be genuinely **absent from the
+corpus**, not merely suspicious — `firestore`, `cloud build` and `secret manager` are real project
+technology (from the `aura-visual` and `django-cloud-ecommerce` READMEs), so asserting their absence
+flagged a correct answer as a bug. After that cleanup the same set scored **18/19**, the last case
+being a wording-sensitive refusal that the suite now asserts by *property* (stays on topic, never
+produces the poem) instead of by exact phrase.
+
+### Cited sources
+
+Every answer can name the project READMEs it leaned on, and the recruiter sees them as small chips
+under the reply — in the history too, because `ChatMessage.sources` is persisted:
+
+```
+retrieval ──▶ CITABLE SOURCES block ──▶ model proposes ["repo/a", "repo/x"]
+                                                  │
+                                                  ▼
+                          _sanitize_sources() keeps only the labels retrieval
+                          actually returned ──▶ message row + API response
+```
+
+* `SOURCES_RULES` asks for the exact labels and forbids inventing one; the allowed list is injected
+  as a `CITABLE SOURCES` block (or an explicit "none available", so the model returns `[]`).
+* **The server decides**: `chat/services.py:_sanitize_sources()` drops any label retrieval did not
+  return, so a fabricated citation can never reach a recruiter — the same *model proposes, server
+  decides* idea as the language guard.
+* The prompt section and the labels come from **one** call to
+  `build_retrieved_context_with_sources()`: a second `retrieve()` would double the embedding cost
+  and the latency.
+* With `RAG_ENABLED=False` no per-chunk retrieval happens, so there are no citable labels and the
+  chips stay empty.
+* The citation label is translated (`Sources` / `Kilder`) and passed to `chat.js` through a
+  `data-label` attribute, so it lives in the Django catalogue like every other string.
+
+### Knowledge freshness
+
+BarklAI is only as good as the corpus behind him, and a README that changes on GitHub reaches him
+**only** when `sync_knowledge` + `build_index` run:
+
+```bash
+python manage.py knowledge_status                  # human-readable report
+python manage.py knowledge_status --days 7         # tighter window
+python manage.py knowledge_status --fail-on-stale  # exit 1, so a cron job can alert
+```
+
+Real output on the current corpus:
+
+```
+Documents: 22
+  Career profile: 1
+  GitHub README: 21
+Chunks:    204 (204 embedded, 100%)
+Fetched:   newest 2026-09-14, oldest 2026-09-12 (stale after 30 day(s))
+Fresh: nothing to do.
+```
+
+It also flags chunks that exist **without an embedding** (i.e. `build_index` never finished), which
+is the state that silently degrades retrieval to the Python cosine fallback. `KNOWLEDGE_STALE_DAYS`
+(default `30`) sets the window.
+
+---
+
+## Production Readiness (v0.4)
+
+> Everything below was verified locally: `check --deploy` is clean with `DEBUG=False`, `/healthz` and the static
+> files answer `200` under `gunicorn`, and CI runs both on every push.
+
+### Security flags and HTTPS
+
+With `DEBUG=False` the app enforces HTTPS on its own. Every flag is environment-driven, so nothing is hard-coded
+and local development stays plain HTTP on localhost:
+
+| Setting | Default when `DEBUG=False` | Env variable |
+| --- | --- | --- |
+| `SECURE_SSL_REDIRECT` | `True` | `SECURE_SSL_REDIRECT` |
+| `SESSION_COOKIE_SECURE` · `CSRF_COOKIE_SECURE` | `True` | same names |
+| `SECURE_HSTS_SECONDS` | `31536000` (one year) | `SECURE_HSTS_SECONDS` |
+| `SECURE_HSTS_INCLUDE_SUBDOMAINS` · `SECURE_HSTS_PRELOAD` | `True` | same names |
+| `SECURE_REFERRER_POLICY` | `same-origin` | `SECURE_REFERRER_POLICY` |
+| `SECURE_PROXY_SSL_HEADER` | *unset* | `TRUST_PROXY_SSL_HEADER=True` |
+| `CSRF_TRUSTED_ORIGINS` | *empty* | `CSRF_TRUSTED_ORIGINS` (comma-separated) |
+
+Two details matter on a managed platform:
+
+* **Cloud Run / Heroku / Fly terminate TLS** and forward the scheme, so set `TRUST_PROXY_SSL_HEADER=True`. Without
+  it Django never sees HTTPS and an unconditional `SECURE_SSL_REDIRECT` turns into a redirect loop.
+* `SECURE_HSTS_PRELOAD` only adds the directive to the header — a domain is preloaded only if you submit it at
+  [hstspreload.org](https://hstspreload.org) — so enabling it is harmless; set it to `False` to opt out.
+
+The gate is one command:
+
+```bash
+DEBUG=False SECRET_KEY=… ALLOWED_HOSTS=… DATABASE_URL=… python manage.py check --deploy
+# System check identified no issues (0 silenced).
+```
+
+### Health check
+
+`GET /healthz` (no trailing slash, so no `APPEND_SLASH` redirect) is the platform probe. It is deliberately cheap
+and never touches the LLM providers, so a Groq or Cloudflare outage cannot make the container look dead:
+
+```json
+{"status": "ok", "database": true, "indexed_chunks": 204}
+```
+
+It answers `503` with `{"status": "degraded", "database": false, …}` when the database is unreachable, and it
+exposes no personal data — the chunk count doubles as a smoke test that the RAG index is still loaded.
+
+### Runtime: gunicorn + WhiteNoise
+
+```bash
+python manage.py migrate
+python manage.py collectstatic --noinput
+gunicorn barkai.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 2 --timeout 120
+```
+
+* **WhiteNoise** serves the collected files from the app process, so a single Cloud Run service is enough (no
+  bucket or CDN required). It sits directly after `SecurityMiddleware`.
+* The storage backend is `whitenoise.storage.CompressedStaticFilesStorage` — deliberately **not** the *Manifest*
+  variant: without a manifest `{% static %}` keeps resolving before `collectstatic` has ever run, which keeps local
+  development and the test suite working.
+* `--timeout 120` matters: a reasoning-model answer can take tens of seconds (see the [Roadmap](#roadmap)).
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request, with **no secrets** required:
+
+| Job | What it does |
+| --- | --- |
+| `test` | installs requirements, compiles the `.mo` catalogues, validates the golden set offline (`eval_agent --check-only`), runs the **94 tests** on SQLite, then `check --deploy` with `DEBUG=False` and a dummy `DATABASE_URL` |
+| `static` | `npm ci` + `npm run css:build` + `git diff --exit-code static/css/barkai.css`, so a new Tailwind class can never be missing from the committed stylesheet |
+
+> The live evaluation (`eval_agent`) is **not** in CI on purpose: it costs real Groq calls and takes ~10 minutes.
+> Run it before a release or from a scheduled job.
 
 ---
 
@@ -382,6 +598,7 @@ but **blank** falls back to its default, so you only set what you need.
 | `AGENT_HISTORY_LIMIT` | Previous turns sent as context (default `20`). | your choice |
 | `AGENT_KNOWLEDGE_MAX_CHARS` | Knowledge text injected into the prompt (default `12000`). | your choice |
 | `AGENT_LANGUAGE_GUARD` | Re-ask the model exactly once when it answers in the wrong language (default `true`). | your choice |
+| `GROQ_MODEL_FALLBACK` | Model retried once when the primary one fails (default `llama-3.3-70b-versatile`, a production model). Set it equal to `GROQ_MODEL` to disable. | Groq console → *Models* |
 | `GITHUB_USERNAME` | GitHub user whose repositories' READMEs are ingested. | `github.com/<username>` |
 | `GITHUB_EXTRA_REPOS` | Extra repos under **other** accounts: comma-separated `owner/repo` (a full GitHub URL works too). | those repos' URLs |
 | `GITHUB_TOKEN` | *(optional)* PAT for private repos / higher rate limits. | GitHub → *Settings → Developer settings → Personal access tokens* |
@@ -401,6 +618,7 @@ but **blank** falls back to its default, so you only set what you need.
 | `RAG_MAX_PER_SOURCE` | Max chunks per document in one prompt (default `2`), so a long generic README cannot fill every slot. | your choice |
 | `RAG_MIN_SCORE` | Minimum cosine similarity for a retrieved chunk (default `0.35`; the profile is excluded from the search and always injected instead). | your choice |
 | `RAG_CHUNK_MAX_CHARS` | Max characters per chunk while indexing (default `1200`). | your choice |
+| `KNOWLEDGE_STALE_DAYS` | Age at which `knowledge_status --fail-on-stale` starts complaining (default `30`). | your choice |
 | `SESSION_RETENTION_DAYS` | Conversation retention window (default `90`). | your choice |
 | `PRIVACY_CONTACT_EMAIL` | Address shown in the privacy notice. | your choice |
 | `INTERVIEW_NOTIFY_EMAIL` | Andrea's inbox for interview requests. Blank disables the notification (requests are still stored and visible in the admin). | your choice |
@@ -413,6 +631,12 @@ but **blank** falls back to its default, so you only set what you need.
 | `CHAT_RATE_LIMIT_PER_SESSION` | Messages allowed per session within the window (default `20`; `0` disables the check). | your choice |
 | `CHAT_RATE_LIMIT_PER_IP` | Messages allowed per IP within the window (default `60`; `0` disables the check). | your choice |
 | `CHAT_RATE_LIMIT_WINDOW_SECONDS` | Length of the rate-limit window (default `300`). | your choice |
+| `SECURE_SSL_REDIRECT` · `SESSION_COOKIE_SECURE` · `CSRF_COOKIE_SECURE` | HTTPS and cookie hardening. Default: **on** when `DEBUG=False`. | your choice |
+| `SECURE_HSTS_SECONDS` · `SECURE_HSTS_INCLUDE_SUBDOMAINS` · `SECURE_HSTS_PRELOAD` | HSTS headers (default when `DEBUG=False`: one year, subdomains, preload directive). | your choice |
+| `SECURE_REFERRER_POLICY` | `Referrer-Policy` header (default `same-origin`). | your choice |
+| `TRUST_PROXY_SSL_HEADER` | Trust `X-Forwarded-Proto` — **required behind Cloud Run/Heroku TLS termination** (default `false`). | your choice |
+| `CSRF_TRUSTED_ORIGINS` | Extra origins allowed to POST, comma-separated (e.g. `https://barkai.example.com`). | your deployment URL |
+| `WHITENOISE_MAX_AGE` | Cache lifetime for the WhiteNoise-served static files (default `31536000`). | your choice |
 
 > For the full experience set `GROQ_API_KEY`, `DATABASE_URL` (PostgreSQL + pgvector),
 > `EMBEDDING_PROVIDER=cloudflare` with `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`,
@@ -434,6 +658,7 @@ Useful URLs:
 * Web UI (chat with BarklAI): <http://127.0.0.1:8000/>
 * Privacy notice: <http://127.0.0.1:8000/privacy/>
 * Swagger/OpenAPI docs: <http://127.0.0.1:8000/api/docs>
+* Health probe: <http://127.0.0.1:8000/healthz>
 * Django admin: <http://127.0.0.1:8000/admin/>
 
 ---
@@ -445,13 +670,13 @@ Interactive docs are served by Django Ninja at `/api/docs` (raw OpenAPI schema a
 ### GET /api/chat/history/{session_id}
 
 Returns the persisted conversation for the session, creating it if it does not exist yet.
-Response: `{session_id, interview_requested, messages: [{id, sender, content, created_at}]}`.
+Response: `{session_id, interview_requested, messages: [{id, sender, content, sources, created_at}]}` — `sources` are the citations stored with each BarklAI reply (always `[]` on a recruiter turn).
 
 ### POST /api/chat/send
 
 Persists the recruiter turn, generates BarklAI's reply and persists it too.
 Request body: `{session_id, message, hr_name?, hr_email?, company_name?}`.
-Response: `{session_id, reply, barkley_state, interview_requested, suggest_questions}` — `barkley_state` drives the mascot clip (e.g. `speaking`, `celebrating`, `searching`) and `suggest_questions` tells the UI to offer the quick-question chips. Validation: `message` is capped at 2000 characters (`422` when exceeded) and the endpoint is rate-limited (`429`) per session and per IP. When `interview_requested` is true the session also gets an `InterviewRequest` row, and the notification goes out immediately if the payload already carried an email.
+Response: `{session_id, reply, barkley_state, interview_requested, suggest_questions, sources}` — `barkley_state` drives the mascot clip (e.g. `speaking`, `celebrating`, `searching`) and `suggest_questions` tells the UI to offer the quick-question chips. `sources` lists the knowledge-base labels the reply is grounded in, already validated against the retrieved chunks (see [Cited sources](#cited-sources)), and is persisted with the assistant message. Validation: `message` is capped at 2000 characters (`422` when exceeded) and the endpoint is rate-limited (`429`) per session and per IP. When `interview_requested` is true the session also gets an `InterviewRequest` row, and the notification goes out immediately if the payload already carried an email.
 
 ### POST /api/chat/contact
 
@@ -468,6 +693,12 @@ Erases the requester's conversation (**GDPR** right to erasure). Body: `{session
 
 Renders the privacy notice (English or Danish, following the active language).
 
+### GET /healthz
+
+Liveness/readiness probe (no trailing slash, so no redirect). Returns `{status, database, indexed_chunks}` with
+`200`, or `503` with `"status": "degraded"` when the database is unreachable. It never calls the LLM providers and
+exposes no personal data — see [Health check](#health-check).
+
 ### Language endpoints
 
 * `POST /i18n/setlang/` — Django's `set_language` view, used by the navbar EN/DA toggle.
@@ -480,19 +711,20 @@ Renders the privacy notice (English or Danish, following the active language).
 ### Project layout
 
 ```
-barkai/                  # project settings + root URLconf (Ninja API mounted at /api/)
+barkai/                  # settings + root URLconf (Ninja API at /api/) + views.py (the /healthz probe)
 chat/                    # the chat application
 ├── api/                 # Django Ninja package (schemas.py + router.py)
-├── management/commands/ # sync_knowledge · build_index · purge_old_sessions · send_test_email · retry_interview_notifications
+├── management/commands/ # sync_knowledge · build_index · knowledge_status · purge_old_sessions · eval_agent · send_test_email · retry_interview_notifications
 ├── knowledge/           # andrea_profile.md (curated career profile, versioned)
 ├── embeddings.py        # pluggable embedding providers (Cloudflare Workers AI)
 ├── rag.py               # retrieval: pgvector search / Python cosine fallback
 ├── models.py            # ChatSession + ChatMessage + KnowledgeDocument + KnowledgeChunk + InterviewRequest
-├── prompts.py           # BarklAI persona + language rules + grounding rules + JSON contract
-├── services.py          # the agent: Groq call, language guard, tolerant JSON parsing, fallbacks
+├── prompts.py           # BarklAI persona + language/grounding/sources rules + JSON contract
+├── services.py          # the agent: Groq call, language guard, citation validation, salvaging
 ├── interviews.py        # InterviewRequest capture rules (one event per contact capture)
 ├── notifications.py     # interview email: idempotent, never raises, stamps notified_at
 ├── throttle.py          # fixed-window rate limiting for the public chat endpoints
+├── evals/               # golden_set.json (EN/DA cases) + the evaluator (stdlib only)
 ├── templates/chat/      # app-scoped templates (index.html, privacy.html)
 └── urls.py              # chat owns its URLconf
 templates/               # project-level templates (base.html, partials/, 403/404/500, includes/toasts)
@@ -504,6 +736,7 @@ scripts/                 # compile_messages.py — pure-Python .mo compiler (no 
 package.json             # frontend build scripts (Tailwind CLI)
 tailwind.config.js       # content globs + theme (fonts, brand palette)
 .env                     # local env vars (gitignored) — load with `set -a; source .env; set +a`
+.github/workflows/       # ci.yml — tests + check --deploy + the compiled-CSS guard
 ```
 
 ### Conventions
@@ -512,7 +745,10 @@ tailwind.config.js       # content globs + theme (fonts, brand palette)
 - **One database configuration** — a single `DATABASE_URL` (there is no `DB_*` fallback). SQLite is only a `DEBUG` convenience for a quick look: it has no pgvector, so retrieval drops to the Python cosine scan and an empty `db.sqlite3` looks like a broken index. With `DEBUG=False` a missing URL raises `ImproperlyConfigured` at boot instead of connecting with guessed credentials.
 - **Apps own their pieces** — `chat/` ships its own `urls.py`, views, templates and API package; project-level `templates/` only covers the shared shell (`base.html`), the error pages and the toast includes.
 - **Service seam** — `chat/services.py` owns the agent: it calls Groq (JSON mode) when `GROQ_API_KEY` is set and otherwise returns consistent, in-character fallbacks. The persona + output contract live in `chat/prompts.py`, and the facts come from `KnowledgeDocument`.
-- **Structured output** — the model is asked for `{reply, interview_requested, suggest_questions}`; parsing is tolerant, so a malformed answer still yields a usable reply.
+- **Structured output** — the model is asked for `{reply, interview_requested, suggest_questions, sources}`; parsing is tolerant, and a **prose answer that JSON mode refuses** (`json_validate_failed`) is salvaged rather than dropped (see [Agent Quality](#agent-quality-v04)).
+- **Evaluation is data, not code** — the golden set lives in `chat/evals/golden_set.json` and the matching logic in `chat/evals/__init__.py` (stdlib only). Extend the JSON whenever a new promise is made to the agent, and keep every `must_not_contain` term genuinely **absent from the corpus**.
+- **Citations are validated server-side** — the model may only name labels retrieval returned (`_sanitize_sources`); never trust a generated label, and never let it reach a recruiter unvalidated.
+- **Freshness is a job** — `knowledge_status --fail-on-stale` is what makes the corpus's age visible; schedule it next to `sync_knowledge`/`build_index`.
 - **Contractual media names** — the UI switches the mascot `<video>` to `/static/mascot/<state>.mp4`, so the clip filenames must not change (details in `static/mascot/README.md`).
 - **Internationalisation** — English is the source language; mark template strings with `{% trans %}`/`{% blocktrans %}`, Python strings with `gettext`, and JS strings with `gettext()` (served by `JavaScriptCatalog`). After editing a `.po`, compile with `python scripts/compile_messages.py` (works without gettext; `makemessages`/`compilemessages` also work where gettext is installed).
 - **RAG seam** — `chat/embeddings.py` is the only place that talks to an embedding provider, and `chat/rag.py` is the only place that queries vectors. Swapping provider or storage never touches the agent.
@@ -536,6 +772,9 @@ python manage.py migrate            # apply migrations (creates the pgvector ext
 python manage.py sync_knowledge     # (re)load the profile + GitHub READMEs into the DB
 python manage.py sync_knowledge --prune  # + delete the documents no longer sourced
 python manage.py build_index        # chunk + embed the knowledge base (RAG index)
+python manage.py knowledge_status   # report coverage/freshness of the knowledge base
+python manage.py eval_agent --check-only  # validate the golden set (no model call)
+python manage.py eval_agent         # score the live agent against the golden set
 python manage.py purge_old_sessions # delete conversations past SESSION_RETENTION_DAYS
 python manage.py send_test_email    # verify the SMTP settings (sends one real email)
 python manage.py retry_interview_notifications  # re-send pending interview notifications
@@ -553,7 +792,19 @@ npm run css:build                   # rebuild static/css/barkai.css after templa
 python manage.py test
 ```
 
-The suite (`chat/tests.py`, **65 tests**) covers: the index view; the history endpoint; `send` persisting both turns; the interview flag; the agent service with the **Groq client mocked** (JSON parsing, friendly fallbacks, the bilingual offline heuristics and the **language guard** — retry once, keep the first answer if the retry also fails, skip the retry when the languages match, honour `AGENT_LANGUAGE_GUARD=False`); `detect_language()` itself; retrieval (profile always injected, profile never searched, per-source diversity cap); the interview hand-off (capture rules including the corrected-email case, the `/api/chat/contact` endpoint, the notification email in a locmem outbox, "never notified twice", details stored even with notifications disabled, cascade on erasure); the guardrails (2000-character cap → `422`, throttle → `429`, `0` disables it); the knowledge commands (`sync_knowledge` incl. the `GITHUB_EXCLUDE_REPOS` filter and `--prune`, `build_index` chunking + hash idempotency, `purge_old_sessions`); the i18n switching (browser detection, session toggle, JS catalogue); the GDPR surface (privacy notice, erasure endpoint); and the `403`/`404`/`500` pages.
+The suite (`chat/tests.py`, **94 tests**) covers: the index view; the history endpoint; `send` persisting both turns; the interview flag; the agent service with the **Groq client mocked** (JSON parsing, friendly fallbacks, the bilingual offline heuristics, the **language guard** — retry once, keep the first answer if the retry also fails, skip the retry when the languages match, honour `AGENT_LANGUAGE_GUARD=False` — and the **JSON-mode salvage** of a refused prose answer); `detect_language()` itself; the citation plumbing (a fabricated label is dropped, the API returns and persists `sources`, user turns carry none); the golden-set evaluator (file shape, both languages, PASS/FAIL reasons); retrieval (profile always injected, profile never searched, per-source diversity cap); the interview hand-off (capture rules including the corrected-email case, the `/api/chat/contact` endpoint, the notification email in a locmem outbox, "never notified twice", details stored even with notifications disabled, cascade on erasure); the guardrails (2000-character cap → `422`, throttle → `429`, `0` disables it); the knowledge commands (`sync_knowledge` incl. the `GITHUB_EXCLUDE_REPOS` filter and `--prune`, `build_index` chunking + hash idempotency, `knowledge_status` coverage/staleness/exit codes, `purge_old_sessions`); the i18n switching (browser detection, session toggle, JS catalogue); the GDPR surface (privacy notice, erasure endpoint); and the `403`/`404`/`500` pages.
+
+### Evaluation (live, on demand)
+
+The unit tests prove the plumbing with the model mocked; the **golden set** proves the agent still tells the truth. It costs real Groq calls, so it is opt-in:
+
+```bash
+python manage.py eval_agent --check-only   # CI-safe: validates the file only
+python manage.py eval_agent                # live score; non-zero exit on failure
+python manage.py eval_agent --only da-     # fast subset while iterating
+```
+
+> Do not run the full live set while iterating on the prompt: 19 cases take ~8-10 minutes because every answer goes through a reasoning model (~25 s each). `--only <prefix>` is the fast loop; the full run is a release gate. See [Agent Quality](#agent-quality-v04).
 
 > The i18n tests assert Danish copy, so run `python scripts/compile_messages.py` first — `*.mo` is gitignored and therefore absent from a fresh clone.
 
@@ -576,12 +827,31 @@ python manage.py test chat.tests.RagVectorTests --keepdb   # runs against Neon
 * Point `DATABASE_URL` at a **PostgreSQL + pgvector** instance (Neon/Supabase free tiers work); `migrate` creates the `vector` extension automatically. It is mandatory: with `DEBUG=False` the app refuses to boot without it.
 * Export `GROQ_API_KEY`, `EMBEDDING_PROVIDER=cloudflare` with `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`, `RAG_ENABLED=True`, `GITHUB_USERNAME` (and `GITHUB_TOKEN` for private repos).
 * Pin `ALLOWED_HOSTS` and `CORS_ALLOWED_ORIGINS`.
-* Run `python manage.py migrate && python manage.py collectstatic --noinput` and serve `staticfiles/` (WhiteNoise or a CDN).
+* Run `python manage.py migrate`, `python manage.py collectstatic --noinput`, then serve with **gunicorn**: WhiteNoise is already in `MIDDLEWARE`, so the same container serves the app and the static files (see [Runtime](#runtime-gunicorn--whitenoise)). Point the platform's health probe at `/healthz`.
 * Refresh the knowledge base on deploy or on a schedule: `python manage.py sync_knowledge && python manage.py build_index`.
 * Compile the translations on deploy: `python scripts/compile_messages.py` (`*.mo` is gitignored, so a fresh checkout has none).
 * Export the SMTP variables plus `INTERVIEW_NOTIFY_EMAIL` and `SITE_BASE_URL`, then verify with `python manage.py send_test_email` before relying on the notifications.
 * Schedule `python manage.py purge_old_sessions` so the retention promised in the privacy notice is real.
 * The deployable artifact is kept small on purpose (target **< 60 MB**): no local ML model ships — embeddings are an HTTP call.
+
+#### Scheduled jobs
+
+Four jobs keep the promises the docs make. On Google Cloud they map to **Cloud Scheduler** entries hitting a small
+runner (Cloud Run job / cron container); on any VM, plain `crontab`:
+
+| Cadence | Command | Why |
+| --- | --- | --- |
+| Daily | `python manage.py sync_knowledge && python manage.py build_index` | a README that changes on GitHub must reach the agent |
+| Daily | `python manage.py knowledge_status --fail-on-stale` | alert when the corpus ages past `KNOWLEDGE_STALE_DAYS` or a chunk lost its embedding |
+| Daily | `python manage.py retry_interview_notifications` | recover notifications lost to an SMTP hiccup or a blank `INTERVIEW_NOTIFY_EMAIL` |
+| Weekly | `python manage.py purge_old_sessions` | enforce the retention window advertised in the privacy notice |
+
+Before a release, the two gates are the test suite and the live evaluation:
+
+```bash
+python manage.py test                 # 88 tests, offline
+python manage.py eval_agent           # live score, non-zero exit on failure
+```
 
 > Hosting suggestion: **Google Cloud Run** (scale-to-zero, generous free tier) + **Neon** for PostgreSQL — effectively free at portfolio traffic.
 
@@ -695,8 +965,13 @@ Because these are strictly necessary, no cookie banner is required; they must st
 * CORS trusts all origins only while `DEBUG=True` and `CORS_ALLOWED_ORIGINS` is empty; production must pin the allowed origins.
 * The public chat endpoints are **rate-limited per session and per IP** and reject messages longer than 2000 characters, so a single client cannot drain the Groq/Cloudflare quota (see [Abuse protection](#abuse-protection)). Use a shared cache and a WAF rule in production.
 * Mail credentials (`EMAIL_HOST_PASSWORD`, e.g. a Gmail app password) live in the environment only and are used server-side. Rotate and revoke them if they leak: an app password grants send **and** read access to that mailbox.
+* **HTTPS is enforced by configuration, not hope**: with `DEBUG=False` the app sets `SECURE_SSL_REDIRECT`, a one-year `SECURE_HSTS_SECONDS`, secure session/CSRF cookies and `SECURE_REFERRER_POLICY`; `SECURE_PROXY_SSL_HEADER` is enabled with `TRUST_PROXY_SSL_HEADER=True` behind Cloud Run's TLS terminator. `python manage.py check --deploy` is the gate and is clean (details in [Production Readiness](#security-flags-and-https)).
+* **A probe never leaks**: `GET /healthz` reports only `status`, a database boolean and a chunk count.
+* **CI enforces the above**: every push runs the test suite *and* `check --deploy`, so a security regression is caught before deploy.
 
-> To be populated: HTTPS, secrets manager and further production hardening notes.
+> Not covered yet: a managed **secrets manager** (Google Secret Manager / Doppler) instead of a `.env` file on the
+> host, and **admin hardening** (2FA on `/admin/`, a non-default admin path). Both are sensible next steps once the
+> app is live.
 
 ---
 
@@ -739,12 +1014,14 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 Living log of known issues and their lifecycle. New bugs are added here as they are discovered; the status is updated when a fix lands.
 
-**Status legend:** 🔴 Active — bug still present · 🔶 Known — documented, non-blocking (to be fixed later) · ✅ Fixed — resolved and verified.
+**Status legend:** 🔴 Active — bug still present · 🔶 Known — documented, non-blocking (to be fixed later) · ✅ Fixed — resolved and verified · ❌ Withdrawn — the diagnosis was wrong (kept for the record).
 
 | ID | Status | Bug | Discovered | Fixed | How it was fixed |
 | --- | --- | --- | --- | --- | --- |
 | B-001 | ✅ Fixed | **Danish questions answered in English** (2 of 3 in a live probe): the JSON contract demanded an English `reply` while the persona demanded the recruiter's language, and the offline interview heuristics were English-only. | 2026-09-13 | 2026-09-13 | Dropped the hard-coded language from the contract, added `LANGUAGE_RULES` + the interface-language fallback, and a one-shot `detect_language()` retry guard (`AGENT_LANGUAGE_GUARD`). Offline fallbacks now follow the message language and the Danish interview hints were added. See [Language parity](#language-parity-en-and-da). |
 | B-002 | ✅ Fixed | **Interview requests were not actionable**: the session was flagged, but no contact details were ever collected (`chat.js` never sent `hr_*` and no form existed), and nobody was notified. | 2026-09-13 | 2026-09-13 | Added the `InterviewRequest` model (event per capture), the hand-off form, `POST /api/chat/contact` (no LLM call) and the idempotent email notification with `retry_interview_notifications`. See [Interview hand-off](#interview-hand-off). |
-| B-003 | ✅ Fixed | **Invented facts**: the agent added Firestore, Cloud Build and Secret Manager to Andrea's Google Cloud stack (absent from the whole knowledge base) and echoed the CPR mention. | 2026-09-13 | 2026-09-13 | Added an explicit `GROUNDING_RULES` block (facts only from the injected ground truth, no personal identifiers) plus a regression test for the "unknown technology" answer. See [Grounded answers](#grounded-answers). |
+| B-003 | ❌ Withdrawn | **"Invented facts" — false alarm.** I claimed the agent added Firestore, Cloud Build and Secret Manager to Andrea's Google Cloud stack as hallucinations. They are real project technology: those services appear in the `aura-visual` and `django-cloud-ecommerce` READMEs, i.e. **inside the knowledge base**. The original check only grepped the local files, never the 21 READMEs stored in the database. | 2026-09-13 | 2026-09-13 | Diagnosis withdrawn. The `GROUNDING_RULES` block added for it is still valuable (it is what makes the "not in the ground truth" answer reliable), and the golden set now carries guards that were **verified absent from the corpus** (`vertex ai`, `azure`, `kubernetes`, `terraform`). See [Grounded answers](#grounded-answers). |
+| B-004 | ✅ Fixed | **The agent echoed a personal identifier.** Asked about work authorisation, BarklAI answered "he is a resident with a CPR number". Root cause: the curated profile *itself* claimed "eligible to work — **resident with CPR**" twice, contradicting its own rule at the bottom of the file ("never share personal identifiers"). The prompt rule alone could not beat a ground truth that volunteered the identifier. | 2026-09-13 | 2026-09-14 | Redacted the profile (now simply "eligible to work in Denmark"), re-ran `sync_knowledge` + `build_index` so the stored text matches, and kept the prompt rule as defence in depth. Three golden-set cases (`en-authorisation`, `en-availability`, `da-arbejdstilladelse`) now assert that `cpr` never appears. |
+| B-005 | ✅ Fixed | **Adding the `sources` field broke whole answers.** With the richer contract the model sometimes replied in prose (`… sources: []`) instead of JSON; Groq rejected it with `400 json_validate_failed` and the code treated that as a total failure, so the recruiter got "I lost the scent of my Groq brain" instead of a perfectly good answer. Caught by a live citation check, not by the mocked unit tests. | 2026-09-14 | 2026-09-14 | `_salvage_failed_generation()` recovers the refused text from `error.failed_generation`, strips the stray `sources:` line and keeps the answer (citations stay empty); the offline interview heuristic still flags intent on the salvaged prose. Covered by `JsonModeSalvageTests`. |
 
 > When a new bug is found, add a row with status 🔴 **Active**, the discovery date and a short description, then fill in the **Fixed** date and the resolution once a fix is verified.

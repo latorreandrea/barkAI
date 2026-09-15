@@ -10,6 +10,7 @@ from django.views.i18n import JavaScriptCatalog
 
 from ninja import NinjaAPI
 
+from barkai.views import healthz
 from chat.api.router import router as chat_router
 
 # Central Django Ninja API instance (automatic OpenAPI docs under /api/docs).
@@ -23,6 +24,9 @@ api = NinjaAPI(
 api.add_router("/chat", chat_router)
 
 urlpatterns = [
+    # Platform probe: no trailing slash, so it answers without an APPEND_SLASH
+    # redirect (probing infrastructure does not follow redirects well).
+    path("healthz", healthz, name="healthz"),
     path("admin/", admin.site.urls),
     path("api/", api.urls),  # Ninja endpoints: /api/chat/*, /api/docs, /api/openapi.json
     # Language switch endpoint used by the navbar EN/DA toggle (set_language).
