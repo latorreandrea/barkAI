@@ -24,6 +24,16 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Validate the Cloud Build config
+        # Needs no dependency, so it runs first and fails fast. Cloud Build
+        # substitutes every value *before* running, which is why a literal `$`
+        # must be written `$$`; without this check the mistake only shows up as a
+        # red build in Cloud Build, with no local feedback at all. The self-test
+        # comes first so a broken validator cannot pass the real file by accident.
+        run: |
+          python scripts/check_cloudbuild.py --self-test
+          python scripts/check_cloudbuild.py
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

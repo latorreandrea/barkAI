@@ -943,6 +943,13 @@ from the console (see above), and from the next push the pipeline updates them.
 > `_REGION` in `cloudbuild.yaml` must match the Artifact Registry repository and the Cloud Run service:
 > change that one line when deploying to another region.
 
+**One rule to remember when editing the file**: Cloud Build applies substitutions to every value *before*
+anything runs, so a literal `$` is written **`$$`** — `$$IMAGE`, never `$IMAGE`. A stray `$NAME` that is not a
+built-in or a declared `_…` substitution fails the whole build with *"key in the template … is not a valid
+built-in substitution"*, and that error only ever appears in Cloud Build. `scripts/check_cloudbuild.py`
+reproduces the check in a second, and CI runs it first (after its own `--self-test`, so a validator that
+stopped matching cannot pass the file by accident); comments are ignored, exactly as Cloud Build does.
+
 #### Scheduled jobs
 
 One Cloud Run Job runs the whole maintenance chain, so the scheduler has a single target to trust:

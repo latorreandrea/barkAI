@@ -80,7 +80,9 @@ steps:
   # 4) The scheduled jobs. Same reasoning as above: only existing jobs are
   #    updated, because creating one requires its own environment variables,
   #    which deliberately live in the console rather than in this file.
-  #    `$$IMAGE` is escaped so Cloud Build passes `$IMAGE` to the shell.
+  #    In the script below, a literal `$` is written `$$`: Cloud Build applies
+  #    substitutions to every value before the shell ever sees it, so `$$IMAGE`
+  #    reaches bash as `$IMAGE`. scripts/check_cloudbuild.py enforces this in CI.
   - id: update-jobs
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
@@ -90,10 +92,10 @@ steps:
         set -e
         IMAGE=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:$SHORT_SHA
         for JOB in ${_MAINTENANCE_JOB} ${_RETENTION_JOB}; do
-          if gcloud run jobs describe "$JOB" --region=${_REGION} >/dev/null 2>&1; then
-            gcloud run jobs update "$JOB" --image "$$IMAGE" --region=${_REGION}
+          if gcloud run jobs describe "$$JOB" --region=${_REGION} >/dev/null 2>&1; then
+            gcloud run jobs update "$$JOB" --image "$$IMAGE" --region=${_REGION}
           else
-            echo "SKIP: the job '$JOB' does not exist yet (create it once from the console, with its own environment variables)."
+            echo "SKIP: the job '$$JOB' does not exist yet (create it once from the console, with its own environment variables)."
           fi
         done
 
