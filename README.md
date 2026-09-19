@@ -47,6 +47,7 @@ Powered by a Retrieval-Augmented Generation (RAG) pipeline, BarkAI indexes open-
 - [Deployment](#deployment)
   - [Container image](#container-image)
   - [Deploying to Cloud Run (Console)](#deploying-to-cloud-run-console)
+  - [Deploying from GitHub (Cloud Build)](#deploying-from-github-cloud-build)
   - [Scheduled jobs](#scheduled-jobs)
 - [Security](#security)
 - [Privacy & GDPR](#privacy--gdpr)
@@ -742,9 +743,9 @@ package.json             # frontend build scripts (Tailwind CLI)
 tailwind.config.js       # content globs + theme (fonts, brand palette)
 .env                     # local env vars (gitignored) — load with `set -a; source .env; set +a`
 .github/workflows/       # ci.yml — tests + check --deploy + the compiled-CSS guard
+cloudbuild.yaml          # GitHub trigger: tests → build → deploy service + jobs
 Dockerfile               # multi-stage production image (web service + scheduled job)
 .dockerignore            # build context: keeps .env, .venv, node_modules and staticfiles out
-.gcloudignore            # the same list for `gcloud builds submit`
 ```
 
 ### Conventions
@@ -871,9 +872,9 @@ Console-first, so no secret ever passes through a shell history. Everything belo
 
 1. **Project** — create it, attach billing, then enable the APIs in *APIs & Services → Library*:
    Cloud Run Admin, Artifact Registry, Cloud Build, Cloud Scheduler.
-2. **Image** — *Cloud Run → Create service → Continuously deploy from a repository* → connect GitHub →
-   pick the repository and `main` → build type **Dockerfile**. Cloud Build rebuilds on every push, so no
-   local Docker is required.
+2. **Image** — connect the repository once (see [Deploying from GitHub](#deploying-from-github-cloud-build)):
+   *Cloud Run → Create service → Continuously deploy from a repository* → build type **Dockerfile**. After
+   that, every push to `main` rebuilds and redeploys — nothing runs from a laptop.
 3. **Service settings** — region `europe-west1` or `europe-north1`, **Allow unauthenticated** (the chat
    is public), container port `8080`, memory `512 MiB`, **request timeout 300 s** (an LLM answer can take
    tens of seconds), **max concurrent requests 4** (80 concurrent 40 s calls would drain the Groq rate
@@ -890,6 +891,45 @@ Console-first, so no secret ever passes through a shell history. Everything belo
    > Viewer role on the project — the accepted trade-off of not using Secret Manager.
 5. **Verify** — `https://<SERVICE>.run.app/healthz` must answer `{"status":"ok","database":true,…}`, then
    try the chat in both languages and an interview request.
+
+#### Deploying from GitHub (Cloud Build)
+
+The build is triggered by a push to `main`; nothing is built on a laptop. What matters is which kind of
+trigger you create:
+
+| | Inline trigger (Console wizard) | **`cloudbuild.yaml`** (what this repo uses) |
+| --- | --- | --- |
+| Set-up | *Cloud Run → Create service → Continuously deploy from a repository* → build type **Dockerfile** | *Cloud Build → Triggers → Connect repository* (Cloud Build GitHub App) → **Cloud Build configuration file** → `cloudbuild.yaml` |
+| Rebuilds the web service | ✅ | ✅ |
+| **Updates the scheduled jobs** | ❌ (by hand, every deploy) | ✅ |
+| Runs the tests before deploying | ❌ | ✅ |
+
+The job step is the whole point. A Cloud Run trigger redeploys **only the service**: without it the two jobs
+keep running the **previous** image, so a maintenance run would execute stale code against a newer database —
+a mismatch you notice weeks later, in the logs, with no obvious cause. `cloudbuild.yaml` builds one image and
+points both workloads at it.
+
+The pipeline is four steps: **test** (the real deploy gate — a red GitHub Actions run does *not* stop this
+trigger), **build** (one image, tagged with the commit), **deploy the service**, **update both jobs**. It
+carries no secret by design: `gcloud run deploy` and `gcloud run jobs update` change only the image, so
+everything configured in the console (environment variables, scaling, probes) is preserved.
+
+Grant these once, or steps 3-4 fail with `PERMISSION_DENIED`:
+
+* the **Cloud Build service account** (`<PROJECT_NUMBER>@cloudbuild.gserviceaccount.com`) needs
+  **Cloud Run Admin** and **Service Account User**;
+* Artifact Registry write access, already included in the default build role.
+
+Trigger settings worth checking: branch `^main$`, build config `cloudbuild.yaml`, and a generous timeout —
+the file sets `timeout: 1200s` because a cold build installs the dependencies, runs the suite and builds the
+image.
+
+> There is deliberately no `.gcloudignore`: with a GitHub trigger the source comes from the repository
+> archive, and for the local `gcloud builds submit` fallback `.gitignore` already covers `.env`, `.venv`,
+> `node_modules`, `db.sqlite3` and `staticfiles`.
+
+> The first deploy is still the manual one described above — the pipeline only *updates* an existing service
+> and existing jobs.
 
 #### Scheduled jobs
 

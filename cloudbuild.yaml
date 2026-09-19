@@ -1,0 +1,81 @@
+# Cloud Build pipeline for the GitHub trigger: gate on the tests, build one
+# image, then point the web service AND the scheduled jobs at it.
+#
+# No secret lives here on purpose. `gcloud run deploy` and `gcloud run jobs
+# update` only change the image, so the environment variables, scaling limits and
+# probes configured in the console are preserved. Never add them to this file.
+#
+# The Dockerfile stays the single source of truth for the image: this pipeline
+# does not duplicate any of its steps.
+
+substitutions:
+  _REGION: europe-west1
+  _SERVICE: barkai
+  _REPOSITORY: barkai
+  _MAINTENANCE_JOB: barkai-maintenance
+  _RETENTION_JOB: barkai-retention
+
+# A cold build (pip install + tests on SQLite + image build) needs room: the
+# trigger default of 10 minutes is too tight.
+timeout: 1200s
+
+steps:
+  # 1) Deploy gate. GitHub Actions already runs the suite for pull-request
+  #    feedback; this step is what protects *production*, because a red CI run
+  #    does not stop the Cloud Build trigger.
+  - id: test
+    name: python:3.11-slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        pip install --no-cache-dir -r requirements.txt
+        python scripts/compile_messages.py
+        python manage.py eval_agent --check-only
+        python manage.py test chat
+
+  # 2) Build once, tagged with the commit and as :latest. The pushes are done by
+  #    the `images:` block below, so there is no separate push step.
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:$SHORT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:latest
+      - .
+
+  # 3) The web service.
+  - id: deploy-service
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:$SHORT_SHA
+      - --region=${_REGION}
+
+  # 4) The scheduled jobs. This step exists because the trigger only redeploys the
+  #    service: without it the jobs would keep running the previous image, and a
+  #    maintenance run would execute stale code against a newer database.
+  #    `$$IMAGE` is escaped so Cloud Build passes `$IMAGE` to the shell.
+  - id: update-jobs
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        IMAGE=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:$SHORT_SHA
+        gcloud run jobs update ${_MAINTENANCE_JOB} --image "$$IMAGE" --region=${_REGION}
+        gcloud run jobs update ${_RETENTION_JOB}  --image "$$IMAGE" --region=${_REGION}
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:$SHORT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
