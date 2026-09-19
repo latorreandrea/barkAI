@@ -1,0 +1,40 @@
+# Docker build context. Keeps everything the app does not need at runtime out of
+# the image: secrets, the local toolchain and project documentation.
+#
+# NOTE: do NOT exclude "*.md" as a whole. chat/knowledge/andrea_profile.md is a
+# markdown file the Cloud Run job really reads (sync_knowledge loads it as ground
+# truth), so excluding it would break the job in production, silently. That is why
+# the top-level documentation is excluded by exact path instead.
+
+# --- Secrets and local state: never inside the image ---
+.env
+db.sqlite3
+db.sqlite3-journal
+
+# --- Version control and CI ---
+.git
+.gitignore
+.github
+
+# --- Local toolchain (very heavy) ---
+.venv
+node_modules
+package-lock.json
+staticfiles
+
+# --- Python noise ---
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# --- Editor / OS ---
+.vscode
+.idea
+.DS_Store
+
+# --- Project documentation (exact paths only, see the note above) ---
+/README.md
+/LICENSE

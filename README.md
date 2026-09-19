@@ -45,6 +45,9 @@ Powered by a Retrieval-Augmented Generation (RAG) pipeline, BarkAI indexes open-
   - [Useful commands](#useful-commands)
 - [Testing](#testing)
 - [Deployment](#deployment)
+  - [Container image](#container-image)
+  - [Deploying to Cloud Run (Console)](#deploying-to-cloud-run-console)
+  - [Scheduled jobs](#scheduled-jobs)
 - [Security](#security)
 - [Privacy & GDPR](#privacy--gdpr)
   - [Roles](#roles)
@@ -151,7 +154,7 @@ Danish question retrieve English project READMEs.
 8. **BarklAI reaction clips** — `idle`, `sniffing`, `searching`, `typing`, `speaking` and `celebrating` MP4s under `static/mascot/` drive the mascot animation, with an emoji fallback when a clip is missing.
 9. **Custom error pages** — project-level `403`, `404` and `500` templates.
 10. **Environment-driven settings** — values read from the environment only (python-dotenv is intentionally not used); blank values fall back to safe defaults, and `DEBUG` defaults to `True` for a frictionless local start.
-11. **Automated tests** — index view, chat REST API, the agent service (Groq mocked, no network), the knowledge sync + indexing commands, the i18n switching, the interview hand-off + notifications, the guardrails, the citation plumbing, the golden-set evaluator and the GDPR surface (**88 tests**; the pgvector round-trip runs only on PostgreSQL).
+11. **Automated tests** — index view, chat REST API, the agent service (Groq mocked, no network), the knowledge sync + indexing commands, the i18n switching, the interview hand-off + notifications, the guardrails, the citation plumbing, the golden-set evaluator, the scheduled-jobs chain and the GDPR surface (**101 tests**; the pgvector round-trip runs only on PostgreSQL).
 12. **Retrieval-augmented answers (RAG)** — the knowledge base is chunked and embedded (`KnowledgeChunk` + **pgvector**). With `RAG_ENABLED=True` only the most relevant chunks (native `<=>` cosine distance on PostgreSQL) are sent to the model; the curated **career profile is always injected verbatim** and kept out of the similarity search (see below), so it cannot crowd the project chunks out of the prompt. Without RAG the whole corpus is stuffed into the prompt as a fallback.
 13. **Bilingual UI and agent (EN/DA)** — Django i18n (`{% trans %}` + `JavaScriptCatalog`) with `Accept-Language` detection and a navbar toggle; the agent answers in the recruiter's language, enforced by a detect-and-retry **language guard** (see [Language parity](#language-parity-en-and-da)).
 14. **GDPR-ready** — a plain-language privacy notice (EN/DA), one-click **erasure** of the conversation (`POST /session/delete/`), a retention job (`purge_old_sessions`) and the full processing register inline in [Privacy & GDPR](#privacy--gdpr).
@@ -164,14 +167,16 @@ Danish question retrieve English project READMEs.
 21. **Knowledge freshness** — `python manage.py knowledge_status` reports coverage and staleness (and can fail a scheduled job), so a README change cannot silently fail to reach the agent.
 22. **Model fallback** — if the primary Groq model fails (a decommissioned *preview* model, a 400/404), the same request is retried once on `GROQ_MODEL_FALLBACK` (a production model) before giving up.
 23. **Production security by default** — with `DEBUG=False` the app enforces HTTPS (`SECURE_SSL_REDIRECT`, HSTS, secure session/CSRF cookies) from environment-driven flags, and `python manage.py check --deploy` is clean (see [Production Readiness](#production-readiness-v04)).
-24. **Deployable runtime** — `gunicorn` + **WhiteNoise** serve the app *and* the static files from one container, with `/healthz` as the platform probe and a GitHub Actions workflow running the tests plus `check --deploy` on every push.
+24. **Deployable runtime** — a multi-stage **Docker image** (see [Container image](#container-image)) runs `gunicorn` + **WhiteNoise**, so a single container serves the app *and* the static files; `/healthz` is the platform probe, GitHub Actions runs the tests plus `check --deploy` on every push, and the same image backs the scheduled Cloud Run job.
 
 ### Roadmap
 
 - **Deferred to after the first deploy** (agreed scope, tracked here so it is not lost):
   - **Stream** the model's tokens into the speech bubble (SSE) instead of waiting for the full reply.
   - Send the recruiter a **confirmation email** (and optionally a booking link) so the interview loop closes on both sides.
-  - A **Dockerfile** (the deploy target is Google Cloud Run) and a `Makefile` for the long local commands.
+  - A `Makefile` for the long local commands (the **Dockerfile** landed in v0.4).
+  - An **`ASSET_VERSION`** cache-buster for the mascot clips: WhiteNoise serves them with a one-year
+    cache, so replacing a clip after launch would otherwise stay invisible to returning visitors.
   - **SEO**: `sitemap.xml`, `robots.txt`, Open Graph / Twitter-card metadata and a real OG image.
 - **Latency**: answers were measured between ~2 s and ~38 s (mean ~25 s) with the current *preview* reasoning model. Switch to a faster **production** model and/or lower `GROQ_MAX_TOKENS`; SSE then hides what remains.
 - Add **push** (browser/Slack) notifications next to the email, and move the send to a background task queue so no interview turn ever waits on SMTP.
@@ -486,7 +491,7 @@ gunicorn barkai.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 2 --time
 
 | Job | What it does |
 | --- | --- |
-| `test` | installs requirements, compiles the `.mo` catalogues, validates the golden set offline (`eval_agent --check-only`), runs the **94 tests** on SQLite, then `check --deploy` with `DEBUG=False` and a dummy `DATABASE_URL` |
+| `test` | installs requirements, compiles the `.mo` catalogues, validates the golden set offline (`eval_agent --check-only`), runs the **101 tests** on SQLite, then `check --deploy` with `DEBUG=False` and a dummy `DATABASE_URL` |
 | `static` | `npm ci` + `npm run css:build` + `git diff --exit-code static/css/barkai.css`, so a new Tailwind class can never be missing from the committed stylesheet |
 
 > The live evaluation (`eval_agent`) is **not** in CI on purpose: it costs real Groq calls and takes ~10 minutes.
@@ -714,7 +719,7 @@ exposes no personal data — see [Health check](#health-check).
 barkai/                  # settings + root URLconf (Ninja API at /api/) + views.py (the /healthz probe)
 chat/                    # the chat application
 ├── api/                 # Django Ninja package (schemas.py + router.py)
-├── management/commands/ # sync_knowledge · build_index · knowledge_status · purge_old_sessions · eval_agent · send_test_email · retry_interview_notifications
+├── management/commands/ # sync_knowledge · build_index · knowledge_status · purge_old_sessions · eval_agent · run_scheduled_jobs · send_test_email · retry_interview_notifications
 ├── knowledge/           # andrea_profile.md (curated career profile, versioned)
 ├── embeddings.py        # pluggable embedding providers (Cloudflare Workers AI)
 ├── rag.py               # retrieval: pgvector search / Python cosine fallback
@@ -737,6 +742,9 @@ package.json             # frontend build scripts (Tailwind CLI)
 tailwind.config.js       # content globs + theme (fonts, brand palette)
 .env                     # local env vars (gitignored) — load with `set -a; source .env; set +a`
 .github/workflows/       # ci.yml — tests + check --deploy + the compiled-CSS guard
+Dockerfile               # multi-stage production image (web service + scheduled job)
+.dockerignore            # build context: keeps .env, .venv, node_modules and staticfiles out
+.gcloudignore            # the same list for `gcloud builds submit`
 ```
 
 ### Conventions
@@ -792,7 +800,7 @@ npm run css:build                   # rebuild static/css/barkai.css after templa
 python manage.py test
 ```
 
-The suite (`chat/tests.py`, **94 tests**) covers: the index view; the history endpoint; `send` persisting both turns; the interview flag; the agent service with the **Groq client mocked** (JSON parsing, friendly fallbacks, the bilingual offline heuristics, the **language guard** — retry once, keep the first answer if the retry also fails, skip the retry when the languages match, honour `AGENT_LANGUAGE_GUARD=False` — and the **JSON-mode salvage** of a refused prose answer); `detect_language()` itself; the citation plumbing (a fabricated label is dropped, the API returns and persists `sources`, user turns carry none); the golden-set evaluator (file shape, both languages, PASS/FAIL reasons); retrieval (profile always injected, profile never searched, per-source diversity cap); the interview hand-off (capture rules including the corrected-email case, the `/api/chat/contact` endpoint, the notification email in a locmem outbox, "never notified twice", details stored even with notifications disabled, cascade on erasure); the guardrails (2000-character cap → `422`, throttle → `429`, `0` disables it); the knowledge commands (`sync_knowledge` incl. the `GITHUB_EXCLUDE_REPOS` filter and `--prune`, `build_index` chunking + hash idempotency, `knowledge_status` coverage/staleness/exit codes, `purge_old_sessions`); the i18n switching (browser detection, session toggle, JS catalogue); the GDPR surface (privacy notice, erasure endpoint); and the `403`/`404`/`500` pages.
+The suite (`chat/tests.py`, **101 tests**) covers: the index view; the history endpoint; `send` persisting both turns; the interview flag; the agent service with the **Groq client mocked** (JSON parsing, friendly fallbacks, the bilingual offline heuristics, the **language guard** — retry once, keep the first answer if the retry also fails, skip the retry when the languages match, honour `AGENT_LANGUAGE_GUARD=False` — and the **JSON-mode salvage** of a refused prose answer); `detect_language()` itself; the citation plumbing (a fabricated label is dropped, the API returns and persists `sources`, user turns carry none); the golden-set evaluator (file shape, both languages, PASS/FAIL reasons); retrieval (profile always injected, profile never searched, per-source diversity cap); the interview hand-off (capture rules including the corrected-email case, the `/api/chat/contact` endpoint, the notification email in a locmem outbox, "never notified twice", details stored even with notifications disabled, cascade on erasure); the guardrails (2000-character cap → `422`, throttle → `429`, `0` disables it); the knowledge commands (`sync_knowledge` incl. the `GITHUB_EXCLUDE_REPOS` filter and `--prune`, `build_index` chunking + hash idempotency, `knowledge_status` coverage/staleness/exit codes, `purge_old_sessions`); the i18n switching (browser detection, session toggle, JS catalogue); the scheduled-jobs chain (step order, failure aggregation, the `SystemExit` case, warning markers, `--no-prune`, `--dry-run`); the GDPR surface (privacy notice, erasure endpoint); and the `403`/`404`/`500` pages.
 
 ### Evaluation (live, on demand)
 
@@ -821,7 +829,7 @@ python manage.py test chat.tests.RagVectorTests --keepdb   # runs against Neon
 
 ## Deployment
 
-> Hosting and CI/CD are to be defined. The production checklist currently supported by the codebase:
+> CI runs in GitHub Actions on every push (see [Continuous integration](#continuous-integration)); what follows is the production checklist the codebase supports.
 
 * Export `DEBUG=False` and a strong `SECRET_KEY`.
 * Point `DATABASE_URL` at a **PostgreSQL + pgvector** instance (Neon/Supabase free tiers work); `migrate` creates the `vector` extension automatically. It is mandatory: with `DEBUG=False` the app refuses to boot without it.
@@ -832,28 +840,103 @@ python manage.py test chat.tests.RagVectorTests --keepdb   # runs against Neon
 * Compile the translations on deploy: `python scripts/compile_messages.py` (`*.mo` is gitignored, so a fresh checkout has none).
 * Export the SMTP variables plus `INTERVIEW_NOTIFY_EMAIL` and `SITE_BASE_URL`, then verify with `python manage.py send_test_email` before relying on the notifications.
 * Schedule `python manage.py purge_old_sessions` so the retention promised in the privacy notice is real.
-* The deployable artifact is kept small on purpose (target **< 60 MB**): no local ML model ships — embeddings are an HTTP call.
+* No local ML model ships — embeddings are an HTTP call. The image comes from the repo's `Dockerfile` and is realistically **~60-75 MB compressed** (what Artifact Registry stores and Cloud Run pulls), see [Container image](#container-image).
+
+#### Container image
+
+```dockerfile
+FROM python:3.11-slim AS builder   # pip install --target=/install
+FROM python:3.11-slim AS runtime   # copy /install, drop pip/setuptools, copy the app,
+                                   # compile_messages + collectstatic at build time
+CMD gunicorn barkai.wsgi:application --bind 0.0.0.0:${PORT} --workers 2 --timeout 120
+```
+
+Three decisions worth knowing:
+
+* **No `--no-compile`**: the `.pyc` files cost a few MB but avoid compiling ~100 packages on the first
+  request. Cloud Run bills startup time, so paying in MB beats paying in seconds.
+* **`DEBUG` is scoped to a single `RUN`**, never an `ENV`: as an `ENV` it would be baked into the image,
+  and a variable missing on Cloud Run would silently start the app in debug mode.
+* **`.dockerignore` excludes `.env`** (plus `.venv`, `node_modules`, `staticfiles`). It deliberately
+  does **not** exclude `*.md` as a whole: `chat/knowledge/andrea_profile.md` is markdown that the
+  scheduled job really reads, so documentation is excluded by exact path (`/README.md`, `/LICENSE`).
+
+The same image runs both workloads: the service (default `CMD`) and the maintenance job (command
+overridden in Cloud Run Jobs).
+
+#### Deploying to Cloud Run (Console)
+
+Console-first, so no secret ever passes through a shell history. Everything below uses `<PLACEHOLDERS>`;
+**this file contains no secret by design**.
+
+1. **Project** — create it, attach billing, then enable the APIs in *APIs & Services → Library*:
+   Cloud Run Admin, Artifact Registry, Cloud Build, Cloud Scheduler.
+2. **Image** — *Cloud Run → Create service → Continuously deploy from a repository* → connect GitHub →
+   pick the repository and `main` → build type **Dockerfile**. Cloud Build rebuilds on every push, so no
+   local Docker is required.
+3. **Service settings** — region `europe-west1` or `europe-north1`, **Allow unauthenticated** (the chat
+   is public), container port `8080`, memory `512 MiB`, **request timeout 300 s** (an LLM answer can take
+   tens of seconds), **max concurrent requests 4** (80 concurrent 40 s calls would drain the Groq rate
+   limit), autoscaling **min 0 / max 3**, health check on **`/healthz`**.
+4. **Environment variables** (*Container → Variables and secrets*, plain variables): `DEBUG=False`,
+   `TRUST_PROXY_SSL_HEADER=True`, `ALLOWED_HOSTS=.run.app,<DOMAIN>`,
+   `CSRF_TRUSTED_ORIGINS=https://<SERVICE>.run.app,https://<DOMAIN>`, `SITE_BASE_URL=https://<DOMAIN>`,
+   `SECRET_KEY`, `DATABASE_URL`, the Groq and Cloudflare variables, `RAG_ENABLED`, `GITHUB_USERNAME`,
+   `GITHUB_EXCLUDE_REPOS`, and the SMTP block (`EMAIL_*`, `INTERVIEW_NOTIFY_EMAIL`,
+   `DEFAULT_FROM_EMAIL` — **quote it** when it carries a display name).
+
+   > Two gotchas: `TRUST_PROXY_SSL_HEADER=True` is mandatory because Cloud Run terminates TLS (without
+   > it `SECURE_SSL_REDIRECT` redirects in a loop), and plain variables are readable by anyone with the
+   > Viewer role on the project — the accepted trade-off of not using Secret Manager.
+5. **Verify** — `https://<SERVICE>.run.app/healthz` must answer `{"status":"ok","database":true,…}`, then
+   try the chat in both languages and an interview request.
 
 #### Scheduled jobs
 
-Four jobs keep the promises the docs make. On Google Cloud they map to **Cloud Scheduler** entries hitting a small
-runner (Cloud Run job / cron container); on any VM, plain `crontab`:
+One Cloud Run Job runs the whole maintenance chain, so the scheduler has a single target to trust:
 
-| Cadence | Command | Why |
-| --- | --- | --- |
-| Daily | `python manage.py sync_knowledge && python manage.py build_index` | a README that changes on GitHub must reach the agent |
-| Daily | `python manage.py knowledge_status --fail-on-stale` | alert when the corpus ages past `KNOWLEDGE_STALE_DAYS` or a chunk lost its embedding |
-| Daily | `python manage.py retry_interview_notifications` | recover notifications lost to an SMTP hiccup or a blank `INTERVIEW_NOTIFY_EMAIL` |
-| Weekly | `python manage.py purge_old_sessions` | enforce the retention window advertised in the privacy notice |
+| Cadence | Job | Command | Why |
+| --- | --- | --- | --- |
+| Daily | `barkai-maintenance` | `python manage.py run_scheduled_jobs` | refreshes the corpus, recovers lost notifications and fails loudly when it went stale |
+| Weekly | `barkai-retention` | `python manage.py purge_old_sessions --days 90` | enforces the retention window advertised in the privacy notice |
+
+`run_scheduled_jobs` is a command rather than a shell `&&` chain on purpose: every step runs even when an
+earlier one fails, each outcome is reported, **`SystemExit` is caught explicitly** (that is how
+`sync_knowledge` signals a GitHub error, and it derives from `BaseException`, so a plain
+`except Exception` would let the process die before printing the summary) and the job exits non-zero when
+anything failed — which is what turns the Cloud Scheduler execution red.
+
+⚠️ **A Cloud Run job does not inherit the service's environment variables.** Set them again on the job
+(*Jobs → the job → Edit and deploy new revision → Container → Variables and secrets*), or the app refuses
+to start without `DATABASE_URL`.
+
+Then create one schedule per job from **Cloud Scheduler → Create job**:
+
+| Field | Value |
+| --- | --- |
+| Frequency | `0 3 * * *` (daily) · `30 3 * * 0` (weekly) |
+| Timezone | `Europe/Copenhagen` |
+| Target · Method | **HTTP** · **POST** |
+| URL | `https://run.googleapis.com/v2/projects/<PROJECT_ID>/locations/<REGION>/jobs/<JOB>:run` |
+| Body | `{}` with header `Content-Type: application/json` |
+| Auth header | **OAuth token**, with a dedicated service account |
+
+Grant that service account permission to run **that specific job** (*Jobs → Permissions*, role *Cloud Run
+Developer* at job level) rather than a project-wide role.
+
+> Cost: Cloud Scheduler bills **per job**, not per execution — 3 jobs are free per billing account, then
+> $0.10/job/month. These two fit inside the free allowance, and the job compute is far inside the Cloud
+> Run monthly free tier (~2.3k vCPU-seconds against 240k).
 
 Before a release, the two gates are the test suite and the live evaluation:
 
 ```bash
-python manage.py test                 # 88 tests, offline
+python manage.py test                 # 101 tests, offline
 python manage.py eval_agent           # live score, non-zero exit on failure
 ```
 
-> Hosting suggestion: **Google Cloud Run** (scale-to-zero, generous free tier) + **Neon** for PostgreSQL — effectively free at portfolio traffic.
+> Hosting: **Google Cloud Run** (scale-to-zero) + **Neon** for PostgreSQL — effectively free at portfolio
+> traffic. Set a **budget alert** in Billing as the safety net.
 
 ---
 

@@ -1070,6 +1070,96 @@ class HealthzTests(TestCase):
         self.assertFalse(payload["database"])
 
 
+class RunScheduledJobsTests(TestCase):
+    """The maintenance chain that the Cloud Run job runs."""
+
+    TARGET = "chat.management.commands.run_scheduled_jobs.call_command"
+
+    def test_dry_run_lists_the_steps_without_running_them(self):
+        out = StringIO()
+        with patch(self.TARGET) as call:
+            call_command("run_scheduled_jobs", "--dry-run", stdout=out)
+        self.assertFalse(call.called)
+        output = out.getvalue()
+        self.assertIn("sync_knowledge --prune", output)
+        self.assertIn("knowledge_status --fail-on-stale", output)
+
+    def test_every_step_runs_in_order(self):
+        out = StringIO()
+        with patch(self.TARGET) as call:
+            call_command("run_scheduled_jobs", stdout=out)
+        names = [args[0] for args, _kwargs in call.call_args_list]
+        self.assertEqual(
+            names,
+            [
+                "sync_knowledge",
+                "build_index",
+                "retry_interview_notifications",
+                "knowledge_status",
+            ],
+        )
+        self.assertIn("Maintenance chain completed.", out.getvalue())
+
+    def test_a_failing_step_does_not_stop_the_chain(self):
+        out, err = StringIO(), StringIO()
+        with patch(
+            self.TARGET, side_effect=[None, CommandError("index exploded"), None, None]
+        ) as call:
+            with self.assertRaises(CommandError):
+                call_command("run_scheduled_jobs", stdout=out, stderr=err)
+        self.assertEqual(call.call_count, 4)  # the chain kept going
+        self.assertIn("build_index", err.getvalue())  # and reported the failure
+
+    def test_system_exit_from_a_step_is_caught(self):
+        """sync_knowledge raises SystemExit on GitHub errors (a BaseException)."""
+        out, err = StringIO(), StringIO()
+        with patch(self.TARGET, side_effect=SystemExit(1)):
+            with self.assertRaises(CommandError):
+                call_command(
+                    "run_scheduled_jobs",
+                    "--only",
+                    "sync_knowledge",
+                    stdout=out,
+                    stderr=err,
+                )
+        self.assertIn("exited with status 1", err.getvalue())
+
+    def test_missing_github_username_is_surfaced_as_a_warning(self):
+        out, err = StringIO(), StringIO()
+
+        def writer(*args, **kwargs):
+            kwargs["stdout"].write(
+                "No GITHUB_USERNAME / GITHUB_EXTRA_REPOS set: skipping GitHub."
+            )
+
+        with patch(self.TARGET, side_effect=writer):
+            call_command(
+                "run_scheduled_jobs",
+                "--only",
+                "sync_knowledge",
+                stdout=out,
+                stderr=err,
+            )
+        self.assertIn("Warnings: sync_knowledge", out.getvalue())
+        self.assertIn("skipping github", err.getvalue().lower())
+
+    def test_unknown_step_is_rejected(self):
+        with self.assertRaises(CommandError):
+            call_command("run_scheduled_jobs", "--only", "nope", stdout=StringIO())
+
+    def test_no_prune_drops_the_prune_flag(self):
+        out = StringIO()
+        with patch(self.TARGET) as call:
+            call_command(
+                "run_scheduled_jobs",
+                "--only",
+                "sync_knowledge",
+                "--no-prune",
+                stdout=out,
+            )
+        self.assertNotIn("prune", call.call_args.kwargs)
+
+
 @override_settings(GROQ_API_KEY="")
 class SyncKnowledgeCommandTests(TestCase):
     """The sync command stores/idempotently refreshes the knowledge base."""

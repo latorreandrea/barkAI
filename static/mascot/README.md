@@ -13,15 +13,35 @@ to `/static/mascot/<state>.mp4` based on the BarklAI state returned by the API.
 | `speaking.mp4`      | BarklAI delivering his answer                      |
 | `celebrating.mp4`   | An interview has been requested 🎉                 |
 
-The `.mp4` files currently here are small generated placeholders (solid color
-clips) so the UI can be demoed before the real BarklAI footage is available.
-Replace them with real clips, keeping the exact filenames above.
+The clips are real footage: the filenames above are what the UI requests, and
+each one should stay **under ~600 KB** so the page stays light (the whole set is
+served from the same container as the app, see the Deployment section of the
+README).
 
-Tips for your own clips:
+Recording tips for new clips:
 
-* Keep them short (1–3 s) and loop-friendly.
-* Encode with **H.264 + yuv420p** for maximum browser compatibility, e.g.:
-  `ffmpeg -i source.mov -c:v libx264 -pix_fmt yuv420p -movflags +faststart speaking.mp4`
-* Match the square framing: the player crops with `object-cover`, so 1:1
-  footage (e.g. 640×640) works best for both the desktop and circular mobile
-  layouts.
+* Keep them short (1-3 s) and loop-friendly: they play muted and on a loop.
+* Keep the **source aspect ratio**. The player uses `object-contain`, so it scales
+  the clip to fit and never crops it. Forcing a square frame would only make the
+  dog smaller, with empty bands around it. (An earlier version of this file
+  claimed the player cropped with `object-cover`: that was wrong.)
+* Encode with **H.264 + `yuv420p`** for maximum browser compatibility (Safari
+  included), and start the file with the index so it plays immediately:
+
+  ```bash
+  ffmpeg -i source.mov -an \
+    -vf "scale=960:960:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2" \
+    -c:v libx264 -profile:v high -crf 30 -preset slow -r 24 \
+    -pix_fmt yuv420p -movflags +faststart speaking.mp4
+  ```
+
+  `-crf` is the main size/quality dial (28 = safer, 32 = lighter); `-r 24` drops
+  the frame rate without a visible loss on a short loop.
+
+* Replace the files **keeping the exact filenames**: `chat.js` builds the URL as
+  `/static/mascot/<state>.mp4`.
+
+> Cache note: WhiteNoise serves these files with a one-year cache header
+> (`WHITENOISE_MAX_AGE`). Replacing a clip *after* launch therefore needs a cache
+> bump — a versioned `ASSET_VERSION` is on the project roadmap for that.
+
