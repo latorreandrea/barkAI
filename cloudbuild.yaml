@@ -74,10 +74,11 @@ steps:
   #    the push would never run either. A deadlock: a fresh tag could never be
   #    deployed. That was B-007. Both tags are pushed so `:latest` stays usable for
   #    a manual console deploy. A literal `$` for the shell is written `$$` (see the
-  #    note in step 5).
+  #    note in step 5). `sh`, not `bash`: the docker builder image is a minimal
+  #    one, and a POSIX `sh` is guaranteed on every base image while bash is not.
   - id: build
     name: gcr.io/cloud-builders/docker
-    entrypoint: bash
+    entrypoint: sh
     args:
       - -c
       - |
