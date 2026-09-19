@@ -607,7 +607,7 @@ but **blank** falls back to its default, so you only set what you need.
 | `GROQ_MODEL_FALLBACK` | Model retried once when the primary one fails (default `llama-3.3-70b-versatile`, a production model). Set it equal to `GROQ_MODEL` to disable. | Groq console → *Models* |
 | `GITHUB_USERNAME` | GitHub user whose repositories' READMEs are ingested. | `github.com/<username>` |
 | `GITHUB_EXTRA_REPOS` | Extra repos under **other** accounts: comma-separated `owner/repo` (a full GitHub URL works too). | those repos' URLs |
-| `GITHUB_TOKEN` | *(optional)* PAT for private repos / higher rate limits. | GitHub → *Settings → Developer settings → Personal access tokens* |
+| `GITHUB_TOKEN` | *(optional locally, **recommended on the maintenance job**)* PAT for private repos and for GitHub's authenticated limit of 5000 requests/hour instead of 60 anonymous ones. | GitHub → *Settings → Developer settings → Personal access tokens* |
 | `GITHUB_EXCLUDE_REPOS` | Repos to keep **out** of the knowledge base (template/boilerplate READMEs, abandoned projects): comma-separated `owner/repo`, a full GitHub URL, or just the bare repo name. | your choice |
 | `GITHUB_INCLUDE_FORKS` | Ingest forks too (default `false`). | your choice |
 | `GITHUB_API_TIMEOUT_SECONDS` | GitHub API timeout (default `15`). | your choice |
@@ -872,24 +872,35 @@ Console-first, so no secret ever passes through a shell history. Everything belo
 
 1. **Project** — create it, attach billing, then enable the APIs in *APIs & Services → Library*:
    Cloud Run Admin, Artifact Registry, Cloud Build, Cloud Scheduler.
-2. **Image** — connect the repository once (see [Deploying from GitHub](#deploying-from-github-cloud-build)):
-   *Cloud Run → Create service → Continuously deploy from a repository* → build type **Dockerfile**. After
-   that, every push to `main` rebuilds and redeploys — nothing runs from a laptop.
+2. **Image** — the build produces it, so first make sure the registry can receive it: *Artifact Registry →
+   Create repository*, name **`barkai`**, format **Docker**, region `europe-west1` — the same `_REPOSITORY`
+   and `_REGION` as `cloudbuild.yaml`, which is where the trigger pushes. The pipeline's `prepare-registry`
+   step creates this repository for you and is a no-op once it exists, so doing it by hand is only needed
+   when that step lacks the permission. Beware of the alternative: the *Continuously deploy from a
+   repository* wizard creates a repository called `cloud-run-source-deploy`, a different name this pipeline
+   never uses. Then connect the repository once with a trigger (see
+   [Deploying from GitHub](#deploying-from-github-cloud-build)), and every push to `main` rebuilds and
+   redeploys — nothing runs from a laptop.
 3. **Service settings** — region `europe-west1` or `europe-north1`, **Allow unauthenticated** (the chat
    is public), container port `8080`, memory `512 MiB`, **request timeout 300 s** (an LLM answer can take
    tens of seconds), **max concurrent requests 4** (80 concurrent 40 s calls would drain the Groq rate
    limit), autoscaling **min 0 / max 3**, health check on **`/healthz`**.
 4. **Environment variables** (*Container → Variables and secrets*, plain variables): `DEBUG=False`,
    `TRUST_PROXY_SSL_HEADER=True`, `ALLOWED_HOSTS=.run.app,<DOMAIN>`,
-   `CSRF_TRUSTED_ORIGINS=https://<SERVICE>.run.app,https://<DOMAIN>`, `SITE_BASE_URL=https://<DOMAIN>`,
+   `CSRF_TRUSTED_ORIGINS=https://*.run.app,https://<DOMAIN>`, `SITE_BASE_URL=https://<DOMAIN>`,
    `SECRET_KEY`, `DATABASE_URL`, the Groq and Cloudflare variables, `RAG_ENABLED`, `GITHUB_USERNAME`,
    `GITHUB_EXCLUDE_REPOS`, and the SMTP block (`EMAIL_*`, `INTERVIEW_NOTIFY_EMAIL`,
    `DEFAULT_FROM_EMAIL` — **quote it** when it carries a display name).
 
-   > Two gotchas: `TRUST_PROXY_SSL_HEADER=True` is mandatory because Cloud Run terminates TLS (without
-   > it `SECURE_SSL_REDIRECT` redirects in a loop), and plain variables are readable by anyone with the
-   > Viewer role on the project — the accepted trade-off of not using Secret Manager.
-5. **Verify** — `https://<SERVICE>.run.app/healthz` must answer `{"status":"ok","database":true,…}`, then
+   > Three gotchas. `TRUST_PROXY_SSL_HEADER=True` is mandatory because Cloud Run terminates TLS (without
+   > it `SECURE_SSL_REDIRECT` redirects in a loop). `CSRF_TRUSTED_ORIGINS` uses the wildcard
+   > `https://*.run.app` on purpose: the real origin is `https://<SERVICE>-<PROJECT_NUMBER>.<REGION>.run.app`
+   > and contains the **project number**, which you cannot know before the service exists — the wildcard
+   > covers both URL formats Cloud Run hands out, so the field can be filled at creation time. And plain
+   > variables are readable by anyone with the Viewer role on the project — the accepted trade-off of not
+   > using Secret Manager.
+5. **Verify** — `https://<SERVICE>-<PROJECT_NUMBER>.<REGION>.run.app/healthz` must answer
+   `{"status":"ok","database":true,…}`, then
    try the chat in both languages and an interview request.
 
 #### Deploying from GitHub (Cloud Build)
@@ -909,16 +920,19 @@ keep running the **previous** image, so a maintenance run would execute stale co
 a mismatch you notice weeks later, in the logs, with no obvious cause. `cloudbuild.yaml` builds one image and
 points both workloads at it.
 
-The pipeline is four steps: **test** (the real deploy gate — a red GitHub Actions run does *not* stop this
-trigger), **build** (one image, tagged with the commit), **deploy the service**, **update both jobs**. It
-carries no secret by design: `gcloud run deploy` and `gcloud run jobs update` change only the image, so
-everything configured in the console (environment variables, scaling, probes) is preserved.
+The pipeline is five steps: **test** (the real deploy gate — a red GitHub Actions run does *not* stop this
+trigger), **prepare-registry** (creates the Artifact Registry repository if it is missing), **build** (one
+image, tagged with the commit), **deploy the service**, **update both jobs**. It carries no secret by design:
+`gcloud run deploy` and `gcloud run jobs update` change only the image, so everything configured in the
+console (environment variables, scaling, probes) is preserved.
 
-Grant these once, or steps 3-4 fail with `PERMISSION_DENIED`:
+Grant these once, or the deploy steps fail with `PERMISSION_DENIED`:
 
 * the **Cloud Build service account** (`<PROJECT_NUMBER>@cloudbuild.gserviceaccount.com`) needs
-  **Cloud Run Admin** and **Service Account User**;
-* Artifact Registry write access, already included in the default build role.
+  **Cloud Run Admin** and **Service Account User** — for the last two steps;
+* **Artifact Registry Admin**, for `prepare-registry`, the only step that *creates* something. The push itself
+  only needs write access, already included in the default build role. Without this role the step fails: grant
+  it, or create the repository once by hand (step 2 above) and let the step report it as existing.
 
 Trigger settings worth checking: branch `^main$`, build config `cloudbuild.yaml`, and a generous timeout —
 the file sets `timeout: 1200s` because a cold build installs the dependencies, runs the suite and builds the
@@ -928,14 +942,16 @@ image.
 > archive, and for the local `gcloud builds submit` fallback `.gitignore` already covers `.env`, `.venv`,
 > `node_modules`, `db.sqlite3` and `staticfiles`.
 
-On the **first run** the two deploy steps skip with a message instead of doing harm: a trigger that creates the
-service itself would produce one with **no environment variables** (`DEBUG=True` on SQLite) and, without
-`--allow-unauthenticated`, unreachable. So the image is built, the service and the two jobs are created once
-from the console (see above), and from the next push the pipeline updates them.
+On the **first run** nothing is deployed yet: `prepare-registry` creates the Artifact Registry repository, the
+image is built and pushed, and the two deploy steps skip with a message instead of doing harm. That is
+deliberate — a trigger that creates the service itself would produce one with **no environment variables**
+(`DEBUG=True` on SQLite) and, without `--allow-unauthenticated`, unreachable. So the service and the two jobs
+are created once from the console (see above), and from the next push the pipeline updates them.
 
 | Step | First run | Later runs |
 | --- | --- | --- |
 | `test` | runs the suite | runs the suite |
+| `prepare-registry` | creates the repository | `'barkai' already exists` |
 | `build` | builds and pushes the image | same |
 | `deploy-service` | `SKIP: the service 'barkai' does not exist yet` — still green | updates the revision |
 | `update-jobs` | `SKIP: the job '…' does not exist yet` — still green | updates both jobs |
@@ -968,6 +984,13 @@ anything failed — which is what turns the Cloud Scheduler execution red.
 ⚠️ **A Cloud Run job does not inherit the service's environment variables.** Set them again on the job
 (*Jobs → the job → Edit and deploy new revision → Container → Variables and secrets*), or the app refuses
 to start without `DATABASE_URL`.
+
+The **maintenance** job also wants its own `GITHUB_TOKEN`, and this is not cosmetic: without one the GitHub
+calls are anonymous, i.e. capped at **60 requests per hour and per IP** — and Cloud Run egress IPs are shared,
+so part of that budget can already be spent by other tenants. A `403` there makes `sync_knowledge` fail and
+the job exit non-zero, which is what turns the Cloud Scheduler execution red. The corpus is never at risk:
+`--prune` deletes only *after* a fully successful fetch, so a rate-limited run is a loud failure, not a
+silent data loss.
 
 Then create one schedule per job from **Cloud Scheduler → Create job**:
 

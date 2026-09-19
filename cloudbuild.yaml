@@ -8,9 +8,10 @@
 # The Dockerfile stays the single source of truth for the image: this pipeline
 # does not duplicate any of its steps.
 #
-# It is idempotent and safe on a *first* run: the two deploy steps only touch a
-# service or a job that already exists, so the first build just produces the image
-# and the logs say what to create from the console.
+# It is idempotent and safe on a *first* run: the registry repository is created
+# on demand, and the two deploy steps only touch a service or a job that already
+# exists, so the first build just produces the image and the logs say what to
+# create from the console.
 #
 # Deploying to another region? Change _REGION below: it must match the Artifact
 # Registry repository and the Cloud Run service.
@@ -42,7 +43,31 @@ steps:
         python manage.py eval_agent --check-only
         python manage.py test chat
 
-  # 2) Build once, tagged with the commit and as :latest. The pushes are done by
+  # 2) The Artifact Registry repository. Nothing else creates it, and a push to a
+  #    repository that does not exist fails with a `denied` error that says
+  #    nothing about the real cause -- the classic first-run trap. Same idempotent
+  #    contract as the deploy steps below: create it if it is missing, otherwise
+  #    say so and move on. Needs `artifactregistry.repositories.create` on the
+  #    Cloud Build service account (the Artifact Registry Admin role); without it
+  #    this step fails and you create the repository once by hand instead.
+  - id: prepare-registry
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        if gcloud artifacts repositories describe ${_REPOSITORY} \
+             --location=${_REGION} >/dev/null 2>&1; then
+          echo "Artifact Registry repository '${_REPOSITORY}' already exists in ${_REGION}."
+        else
+          gcloud artifacts repositories create ${_REPOSITORY} \
+            --repository-format=docker \
+            --location=${_REGION} \
+            --description="barkAI images, built by the Cloud Build trigger"
+        fi
+
+  # 3) Build once, tagged with the commit and as :latest. The pushes are done by
   #    the `images:` block below, so there is no separate push step.
   - id: build
     name: gcr.io/cloud-builders/docker
@@ -54,7 +79,7 @@ steps:
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:latest
       - .
 
-  # 3) The web service. It is UPDATED only: on a first run the service does not
+  # 4) The web service. It is UPDATED only: on a first run the service does not
   #    exist yet and `gcloud run deploy` would happily CREATE it -- without any
   #    environment variable (so DEBUG=True on SQLite) and, with no
   #    --allow-unauthenticated flag, unreachable. That misconfiguration is worse
@@ -77,7 +102,7 @@ steps:
           echo "and give it its environment variables; every later run updates it."
         fi
 
-  # 4) The scheduled jobs. Same reasoning as above: only existing jobs are
+  # 5) The scheduled jobs. Same reasoning as above: only existing jobs are
   #    updated, because creating one requires its own environment variables,
   #    which deliberately live in the console rather than in this file.
   #    In the script below, a literal `$` is written `$$`: Cloud Build applies
