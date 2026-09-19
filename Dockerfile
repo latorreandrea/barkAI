@@ -62,13 +62,31 @@ COPY . .
 # Build-time steps. DEBUG is scoped to this RUN on purpose and must NOT be baked
 # into the image: as an ENV it would make the app start in debug mode in
 # production whenever the variable is missing on Cloud Run.
+#
+# The first two commands are a smoke test: the image must be able to START. A
+# missing executable or an import-time error in settings is caught here, where the
+# log is one click away, instead of at the first Cloud Run deploy, where it shows
+# up as the generic "container failed to start and listen on the port". That is
+# not hypothetical: the first deploy died exactly there, because the CMD called a
+# `gunicorn` executable the runtime image never received (see the CMD comment).
+#
 # No credential is needed here: collectstatic does not touch the database and
 # compile_messages is a plain script.
-RUN python scripts/compile_messages.py \
+RUN python -m gunicorn --version \
+ && DEBUG=True python -c "from barkai.wsgi import application" \
+ && python scripts/compile_messages.py \
  && DEBUG=True python manage.py collectstatic --noinput
 
 EXPOSE 8080
 
 # Two workers are enough: the app is I/O-bound and the latency comes from the LLM
 # call. A 120 s timeout covers a slow reasoning-model answer.
-CMD ["sh", "-c", "exec gunicorn barkai.wsgi:application --bind 0.0.0.0:${PORT} --workers 2 --timeout 120 --access-logfile - --error-logfile -"]
+#
+# `python -m gunicorn`, never the bare `gunicorn` command: the builder installs
+# with `pip install --target`, and pip puts the console scripts in a subdirectory
+# of that target instead of a directory on PATH, so no `gunicorn` executable ever
+# reaches the runtime image. Running the module needs no PATH entry at all --
+# gunicorn/__main__.py calls the very same entry point as the console script. The
+# jobs use `python manage.py ...` for the same reason: this image expects no
+# console script to exist.
+CMD ["sh", "-c", "exec python -m gunicorn barkai.wsgi:application --bind 0.0.0.0:${PORT} --workers 2 --timeout 120 --access-logfile - --error-logfile -"]
