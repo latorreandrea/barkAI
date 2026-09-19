@@ -861,11 +861,12 @@ CMD python -m gunicorn barkai.wsgi:application --bind 0.0.0.0:${PORT} --workers 
 Four decisions worth knowing:
 
 * **A build-time smoke test, not hope**: before the slow steps, the image must prove it can *start* —
-  `python -m gunicorn --version` and an import of `barkai.wsgi`. Each of those would have caught B-006,
-  where the image built and pushed perfectly and then died at startup because the `CMD` called a
-  `gunicorn` executable the runtime stage never received (`pip install --target` puts console scripts off
-  `PATH`). A container that cannot start is now a failed **build**, one click from its log, instead of a
-  Cloud Run mystery about a port.
+  `python -m gunicorn --check-config barkai.wsgi:application` (which parses the gunicorn flags *and*
+  imports the app) plus an import of `barkai.wsgi`. Either would have caught B-006, where the image built
+  and pushed perfectly and then died at startup because the `CMD` called a `gunicorn` executable the
+  runtime stage never received (`pip install --target` puts console scripts off `PATH`); `--check-config`
+  also catches a *flag* typo that a plain `--version` would let through. A container that cannot start is
+  now a failed **build**, one click from its log, instead of a Cloud Run mystery about a port.
 * **No `--no-compile`**: the `.pyc` files cost a few MB but avoid compiling ~100 packages on the first
   request. Cloud Run bills startup time, so paying in MB beats paying in seconds.
 * **`DEBUG` is scoped to a single `RUN`**, never an `ENV`: as an `ENV` it would be baked into the image,
@@ -934,9 +935,14 @@ points both workloads at it.
 
 The pipeline is five steps: **test** (the real deploy gate — a red GitHub Actions run does *not* stop this
 trigger), **prepare-registry** (creates the Artifact Registry repository if it is missing), **build** (one
-image, tagged with the commit), **deploy the service**, **update both jobs**. It carries no secret by design:
-`gcloud run deploy` and `gcloud run jobs update` change only the image, so everything configured in the
-console (environment variables, scaling, probes) is preserved.
+image, tagged with the commit and pushed *right there*), **deploy the service**, **update both jobs**. It
+carries no secret by design: `gcloud run deploy` and `gcloud run jobs update` change only the image, so
+everything configured in the console (environment variables, scaling, probes) is preserved.
+
+> The push lives **inside** the `build` step, and not in an `images:` block at the end of the file. Cloud
+> Build publishes those artifacts only after the whole build has succeeded, which is too late for a deploy
+> step that runs *during* the build — and because that step then fails, the push never happens either, so a
+> fresh tag could never be deployed. That deadlock is B-007.
 
 Grant these once, or the deploy steps fail with `PERMISSION_DENIED`:
 
@@ -1200,7 +1206,9 @@ Living log of known issues and their lifecycle. New bugs are added here as they 
 | B-003 | ❌ Withdrawn | **"Invented facts" — false alarm.** I claimed the agent added Firestore, Cloud Build and Secret Manager to Andrea's Google Cloud stack as hallucinations. They are real project technology: those services appear in the `aura-visual` and `django-cloud-ecommerce` READMEs, i.e. **inside the knowledge base**. The original check only grepped the local files, never the 21 READMEs stored in the database. | 2026-09-13 | 2026-09-13 | Diagnosis withdrawn. The `GROUNDING_RULES` block added for it is still valuable (it is what makes the "not in the ground truth" answer reliable), and the golden set now carries guards that were **verified absent from the corpus** (`vertex ai`, `azure`, `kubernetes`, `terraform`). See [Grounded answers](#grounded-answers). |
 | B-004 | ✅ Fixed | **The agent echoed a personal identifier.** Asked about work authorisation, BarklAI answered "he is a resident with a CPR number". Root cause: the curated profile *itself* claimed "eligible to work — **resident with CPR**" twice, contradicting its own rule at the bottom of the file ("never share personal identifiers"). The prompt rule alone could not beat a ground truth that volunteered the identifier. | 2026-09-13 | 2026-09-14 | Redacted the profile (now simply "eligible to work in Denmark"), re-ran `sync_knowledge` + `build_index` so the stored text matches, and kept the prompt rule as defence in depth. Three golden-set cases (`en-authorisation`, `en-availability`, `da-arbejdstilladelse`) now assert that `cpr` never appears. |
 | B-005 | ✅ Fixed | **Adding the `sources` field broke whole answers.** With the richer contract the model sometimes replied in prose (`… sources: []`) instead of JSON; Groq rejected it with `400 json_validate_failed` and the code treated that as a total failure, so the recruiter got "I lost the scent of my Groq brain" instead of a perfectly good answer. Caught by a live citation check, not by the mocked unit tests. | 2026-09-14 | 2026-09-14 | `_salvage_failed_generation()` recovers the refused text from `error.failed_generation`, strips the stray `sources:` line and keeps the answer (citations stay empty); the offline interview heuristic still flags intent on the salvaged prose. Covered by `JsonModeSalvageTests`. |
-| B-006 | 🔴 Active | **The first Cloud Run deploy could never start.** The container's stderr said `sh: 1: exec: gunicorn: not found`, and one second later the platform's default startup TCP probe reported `The instance was not started`. The builder installs with `pip install --target=/install`, which puts the console scripts in a subdirectory of that target, while the runtime stage copied only `site-packages` — so no `gunicorn` executable ever reached the runtime `PATH`. The image built and pushed happily because every build-time step runs as `python manage.py …`, which needs no console script, and Django was never imported, so not one environment variable was ever read. | 2026-09-19 | — | The `CMD` now runs `python -m gunicorn`, which needs no `PATH` entry at all (gunicorn's `__main__` calls the same entry point as the console script), and the build ends with a smoke test — `python -m gunicorn --version` plus `DEBUG=True python -c "from barkai.wsgi import application"` — so an image that cannot start fails the **build** instead of the deploy. Neither the unit suite nor `check --deploy` could have caught it: the bug lives between the build and the boot. Awaiting the rebuild that proves the container starts. |
+| B-006 | 🔴 Active | **The first Cloud Run deploy could never start.** The container's stderr said `sh: 1: exec: gunicorn: not found`, and one second later the platform's default startup TCP probe reported `The instance was not started`. The builder installs with `pip install --target=/install`, which puts the console scripts in a subdirectory of that target, while the runtime stage copied only `site-packages` — so no `gunicorn` executable ever reached the runtime `PATH`. The image built and pushed happily because every build-time step runs as `python manage.py …`, which needs no console script, and Django was never imported, so not one environment variable was ever read. | 2026-09-19 | — | The `CMD` now runs `python -m gunicorn`, which needs no `PATH` entry at all (gunicorn's `__main__` calls the same entry point as the console script), and the build ends with a smoke test — `DEBUG=True python -m gunicorn --check-config barkai.wsgi:application`, which parses the flags *and* imports the app — so an image that cannot start fails the **build** instead of the deploy. Neither the unit suite nor `check --deploy` could have caught it: the bug lives between the build and the boot. Awaiting the rebuild that proves the container starts. |
+| B-007 | 🔴 Active | **A fresh tag could never be deployed: `Image '…:e6a55cc' not found`.** The pipeline built the image with `docker build` and published it through the `images:` block at the end of `cloudbuild.yaml` — but Cloud Build pushes those artifacts only *after* the whole build succeeds, while `deploy-service` runs *during* the build and needs the tag to be in the registry already. So the deploy step always looked for something that did not exist yet; it failed, the build failed with it, and that is precisely why the push never ran. The deadlock meant the commit that fixed B-006 could never reach Cloud Run: the service kept running the previous image. | 2026-09-19 | — | The `build` step now runs `docker build` **and** `docker push` for both tags, so the image is published before anything consumes it, and the `images:` block is gone with a comment recording why it must not come back. Verified before pushing: the extracted step script passes `bash -n` and produces both `docker push` calls with the right image reference against a stub `docker`. Awaiting the build that finally deploys the tag. |
 
 > When a new bug is found, add a row with status 🔴 **Active**, the discovery date and a short description, then fill in the **Fixed** date and the resolution once a fix is verified.
+
 

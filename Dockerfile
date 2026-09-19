@@ -64,15 +64,17 @@ COPY . .
 # production whenever the variable is missing on Cloud Run.
 #
 # The first two commands are a smoke test: the image must be able to START. A
-# missing executable or an import-time error in settings is caught here, where the
-# log is one click away, instead of at the first Cloud Run deploy, where it shows
-# up as the generic "container failed to start and listen on the port". That is
-# not hypothetical: the first deploy died exactly there, because the CMD called a
-# `gunicorn` executable the runtime image never received (see the CMD comment).
+# missing executable, a malformed flag or an import-time error in settings is caught
+# here, where the log is one click away, instead of at the first Cloud Run deploy,
+# where it shows up as the generic "container failed to start and listen on the
+# port". Not hypothetical: the first deploy died exactly there, because the CMD
+# called a `gunicorn` executable the runtime image never received (see the CMD
+# comment). `--check-config` parses the flags *and* imports the app, so it also
+# catches a flag typo the plain `--version` would have let through.
 #
 # No credential is needed here: collectstatic does not touch the database and
 # compile_messages is a plain script.
-RUN python -m gunicorn --version \
+RUN DEBUG=True python -m gunicorn --check-config barkai.wsgi:application \
  && DEBUG=True python -c "from barkai.wsgi import application" \
  && python scripts/compile_messages.py \
  && DEBUG=True python manage.py collectstatic --noinput

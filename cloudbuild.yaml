@@ -1,5 +1,5 @@
-# Cloud Build pipeline for the GitHub trigger: gate on the tests, build one
-# image, then point the web service AND the scheduled jobs at it.
+# Cloud Build pipeline for the GitHub trigger: gate on the tests, build AND push
+# one image, then point the web service and the scheduled jobs at it.
 #
 # No secret lives here on purpose. `gcloud run deploy` and `gcloud run jobs
 # update` only change the image, so the environment variables, scaling limits and
@@ -67,17 +67,25 @@ steps:
             --description="barkAI images, built by the Cloud Build trigger"
         fi
 
-  # 3) Build once, tagged with the commit and as :latest. The pushes are done by
-  #    the `images:` block below, so there is no separate push step.
+  # 3) Build and push, in this order and inside this step. The push cannot be left
+  #    to an `images:` block at the bottom of this file: Cloud Build pushes those
+  #    only after the *whole* build has succeeded, so `deploy-service` below would
+  #    look for a tag the registry does not have yet -- and because that step fails,
+  #    the push would never run either. A deadlock: a fresh tag could never be
+  #    deployed. That was B-007. Both tags are pushed so `:latest` stays usable for
+  #    a manual console deploy. A literal `$` for the shell is written `$$` (see the
+  #    note in step 5).
   - id: build
     name: gcr.io/cloud-builders/docker
+    entrypoint: bash
     args:
-      - build
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:$SHORT_SHA
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:latest
-      - .
+      - -c
+      - |
+        set -e
+        IMAGE=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}
+        docker build -t "$$IMAGE:$SHORT_SHA" -t "$$IMAGE:latest" .
+        docker push "$$IMAGE:$SHORT_SHA"
+        docker push "$$IMAGE:latest"
 
   # 4) The web service. It is UPDATED only: on a first run the service does not
   #    exist yet and `gcloud run deploy` would happily CREATE it -- without any
@@ -124,9 +132,11 @@ steps:
           fi
         done
 
-images:
-  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:$SHORT_SHA
-  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:latest
-
+# No `images:` block on purpose. It looks like the tidy way to publish the image,
+# but Cloud Build pushes those artifacts only *after* the whole build has
+# succeeded -- too late for `deploy-service`, which runs during the build and needs
+# the tag to be in the registry already. Step 3 pushes explicitly instead. That was
+# B-007, and the symptom was `Image '...:e6a55cc' not found` on a tag that existed
+# nowhere yet.
 options:
   logging: CLOUD_LOGGING_ONLY
