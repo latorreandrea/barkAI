@@ -928,8 +928,20 @@ image.
 > archive, and for the local `gcloud builds submit` fallback `.gitignore` already covers `.env`, `.venv`,
 > `node_modules`, `db.sqlite3` and `staticfiles`.
 
-> The first deploy is still the manual one described above — the pipeline only *updates* an existing service
-> and existing jobs.
+On the **first run** the two deploy steps skip with a message instead of doing harm: a trigger that creates the
+service itself would produce one with **no environment variables** (`DEBUG=True` on SQLite) and, without
+`--allow-unauthenticated`, unreachable. So the image is built, the service and the two jobs are created once
+from the console (see above), and from the next push the pipeline updates them.
+
+| Step | First run | Later runs |
+| --- | --- | --- |
+| `test` | runs the suite | runs the suite |
+| `build` | builds and pushes the image | same |
+| `deploy-service` | `SKIP: the service 'barkai' does not exist yet` — still green | updates the revision |
+| `update-jobs` | `SKIP: the job '…' does not exist yet` — still green | updates both jobs |
+
+> `_REGION` in `cloudbuild.yaml` must match the Artifact Registry repository and the Cloud Run service:
+> change that one line when deploying to another region.
 
 #### Scheduled jobs
 

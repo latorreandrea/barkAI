@@ -7,6 +7,13 @@
 #
 # The Dockerfile stays the single source of truth for the image: this pipeline
 # does not duplicate any of its steps.
+#
+# It is idempotent and safe on a *first* run: the two deploy steps only touch a
+# service or a job that already exists, so the first build just produces the image
+# and the logs say what to create from the console.
+#
+# Deploying to another region? Change _REGION below: it must match the Artifact
+# Registry repository and the Cloud Run service.
 
 substitutions:
   _REGION: europe-west1
@@ -47,20 +54,32 @@ steps:
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:latest
       - .
 
-  # 3) The web service.
+  # 3) The web service. It is UPDATED only: on a first run the service does not
+  #    exist yet and `gcloud run deploy` would happily CREATE it -- without any
+  #    environment variable (so DEBUG=True on SQLite) and, with no
+  #    --allow-unauthenticated flag, unreachable. That misconfiguration is worse
+  #    than a skipped step, so the service is left to the console and this step
+  #    just reports it.
   - id: deploy-service
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - run
-      - deploy
-      - ${_SERVICE}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:$SHORT_SHA
-      - --region=${_REGION}
+      - -c
+      - |
+        set -e
+        IMAGE=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:$SHORT_SHA
+        if gcloud run services describe ${_SERVICE} --region=${_REGION} >/dev/null 2>&1; then
+          gcloud run deploy ${_SERVICE} --image "$$IMAGE" --region=${_REGION}
+        else
+          echo "SKIP: the service '${_SERVICE}' does not exist yet."
+          echo "The image was built and pushed. Create the service once from the"
+          echo "console (Cloud Run -> Create service -> existing container image)"
+          echo "and give it its environment variables; every later run updates it."
+        fi
 
-  # 4) The scheduled jobs. This step exists because the trigger only redeploys the
-  #    service: without it the jobs would keep running the previous image, and a
-  #    maintenance run would execute stale code against a newer database.
+  # 4) The scheduled jobs. Same reasoning as above: only existing jobs are
+  #    updated, because creating one requires its own environment variables,
+  #    which deliberately live in the console rather than in this file.
   #    `$$IMAGE` is escaped so Cloud Build passes `$IMAGE` to the shell.
   - id: update-jobs
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
@@ -70,8 +89,13 @@ steps:
       - |
         set -e
         IMAGE=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:$SHORT_SHA
-        gcloud run jobs update ${_MAINTENANCE_JOB} --image "$$IMAGE" --region=${_REGION}
-        gcloud run jobs update ${_RETENTION_JOB}  --image "$$IMAGE" --region=${_REGION}
+        for JOB in ${_MAINTENANCE_JOB} ${_RETENTION_JOB}; do
+          if gcloud run jobs describe "$JOB" --region=${_REGION} >/dev/null 2>&1; then
+            gcloud run jobs update "$JOB" --image "$$IMAGE" --region=${_REGION}
+          else
+            echo "SKIP: the job '$JOB' does not exist yet (create it once from the console, with its own environment variables)."
+          fi
+        done
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE}:$SHORT_SHA
