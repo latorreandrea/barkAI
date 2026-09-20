@@ -18,12 +18,35 @@ denormalised "latest contact" cache used by the admin list and its search box.
 """
 from __future__ import annotations
 
+import re
+
 from django.utils import timezone
 
 from chat.models import ChatMessage, InterviewRequest
 
 # Longest triggering message kept for context (the rest is dropped).
 _MESSAGE_MAX_CHARS = 1000
+
+# An address the recruiter typed in the chat itself ("I'm Jane, jane@acme.com").
+# Deliberately permissive and punctuation-free at the end: the hand-off form
+# shows the address back for confirmation, so a stray capture costs one edit.
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+")
+
+
+def extract_contact(text: str) -> dict[str, str]:
+    """Contact details volunteered in a message — the email, when there is one.
+
+    The agent asks for name, email and company in the same reply that flags an
+    interview, so recruiters often just *write* the address in the chat instead
+    of using the form. Reading it back is deterministic (no LLM call), and the
+    form shows it prefilled for confirmation. A name or a company written in
+    prose ("I'm Jane from Acme") is left to the form rather than guessed with a
+    pattern; only the address is needed to answer the recruiter.
+    """
+    match = _EMAIL_RE.search(text or "")
+    if not match:
+        return {}
+    return {"hr_email": match.group(0)[:254]}
 
 
 def capture_interview_request(

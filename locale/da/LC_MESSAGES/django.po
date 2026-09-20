@@ -189,8 +189,8 @@ msgstr "Samtaler slettes automatisk efter %(retention_days)s dages inaktivitet."
 msgid "Your rights"
 msgstr "Dine rettigheder"
 
-msgid "You can access and erase your conversation at any time: the 'Delete my conversation' button on the chat page removes it immediately from the database."
-msgstr "Du kan tilgå og slette din samtale når som helst: knappen »Slet min samtale« på chatsiden fjerner den straks fra databasen."
+msgid "You can access and erase your conversation at any time: the 'Delete my conversation' button in the footer removes it immediately from the database."
+msgstr "Du kan tilgå og slette din samtale når som helst: knappen »Slet min samtale« i footeren fjerner den straks fra databasen."
 
 msgid "Cookies and local storage"
 msgstr "Cookies og lokal lagring"
@@ -206,6 +206,9 @@ msgstr "Tilbage til chatten"
 
 msgid "Delete my conversation"
 msgstr "Slet min samtale"
+
+msgid "Delete this conversation? This cannot be undone."
+msgstr "Vil du slette denne samtale? Det kan ikke fortrydes."
 
 # --- Interview hand-off form (v0.4) ---------------------------------------
 
@@ -226,6 +229,9 @@ msgstr "Deles kun med Andrea, så han kan vende tilbage til dig om samtalen."
 
 msgid "Save my details"
 msgstr "Gem mine oplysninger"
+
+msgid "Confirm my details"
+msgstr "Bekræft mine oplysninger"
 
 msgid "🐾 Thanks! Your details are on their way to Andrea."
 msgstr "🐾 Tak! Dine oplysninger er på vej til Andrea."

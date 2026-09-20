@@ -649,10 +649,68 @@
         };
     }
 
-    function revealContactForm() {
-        if (contactFormEl && contactFormEl.hidden) {
-            contactFormEl.hidden = false;
+    // What the conversation already knows about the recruiter: the API returns
+    // it with the history and with every reply (name/email/company, all
+    // optional). It includes an address the visitor simply *typed* in the chat —
+    // the server picks it up from the message (chat/interviews.py) — so the form
+    // below can be shown prefilled instead of asking for it twice.
+    var knownContact = { hr_name: "", hr_email: "", company_name: "" };
+
+    function rememberContact(contact) {
+        if (!contact) {
+            return;
         }
+        ["hr_name", "hr_email", "company_name"].forEach(function (key) {
+            if (contact[key]) {
+                knownContact[key] = contact[key];
+            }
+        });
+    }
+
+    // What the form was last filled with: a field the visitor has edited since
+    // then is never overwritten, while an untouched one follows whatever the
+    // conversation learns next (a corrected address, say).
+    var prefilledContact = { hr_name: "", hr_email: "", company_name: "" };
+
+    // Front of the form: fill from what we know without stepping on the visitor.
+    function fillContactForm() {
+        [[contactNameEl, "hr_name"], [contactEmailEl, "hr_email"], [contactCompanyEl, "company_name"]]
+            .forEach(function (pair) {
+                var field = pair[0];
+                var key = pair[1];
+                var typed = field ? field.value.trim() : "";
+                if (!field || !knownContact[key]) {
+                    return;
+                }
+                if (typed === "" || typed === prefilledContact[key]) {
+                    field.value = knownContact[key];
+                    prefilledContact[key] = knownContact[key];
+                }
+            });
+    }
+
+    // The label says what the visitor is doing: confirming details the
+    // conversation already knows (the form is prefilled) or saving the ones they
+    // typed just now. Both strings come from the template.
+    function setContactActionLabel(isConfirming) {
+        if (!contactSaveBtn) {
+            return;
+        }
+        var label = contactSaveBtn.getAttribute(isConfirming ? "data-confirm-label" : "data-save-label");
+        if (label) {
+            contactSaveBtn.textContent = label;
+        }
+    }
+
+    // Reveal the hand-off form for confirmation: whatever the conversation
+    // collected is prefilled, so the visitor only has to correct or approve it.
+    function revealContactForm() {
+        if (!contactFormEl) {
+            return;
+        }
+        fillContactForm();
+        setContactActionLabel(!!(knownContact.hr_name || knownContact.hr_email || knownContact.company_name));
+        contactFormEl.hidden = false;
     }
 
     function hideContactForm() {
@@ -1063,9 +1121,12 @@
         stopComposerTyping(false);
         setBusy(true);
 
-        // Snapshot the hand-off form before the request: it may be hidden again
-        // as soon as the reply comes back.
+        // Snapshot the hand-off form before the request: its details ride along
+        // with the message. The form itself then steps out of the way while
+        // BarklAI works, so nothing covers his answer — it comes back, prefilled,
+        // once the reply is on screen and the interview is still pending.
         var sentDetails = contactDetails();
+        hideContactForm();
 
         // 1) The previous live utterance moves up into the history while the
         //    user's new message is appended right below it.
@@ -1091,6 +1152,7 @@
 
         try {
             var data = await requestPromise;
+            rememberContact(data.contact);
             await flushPromise; // Never type the new reply over the old bubble copy.
             setMascotState(data.interview_requested ? "celebrating" : "speaking");
             await typeBubbleMessage(data.reply, data.sources);
@@ -1133,6 +1195,7 @@
                 throw new Error("server returned HTTP " + response.status);
             }
             var data = await response.json();
+            rememberContact(data.contact);
             var messages = data.messages.slice();
 
             // The last assistant reply is the "live" one: park it in the bubble.
@@ -1280,31 +1343,10 @@
     });
 
     // ================================================================ //
-    // 13) GDPR: erase this conversation on demand (right to erasure)   //
+    // 13) GDPR: the right to erasure lives in the site footer and is   //
+    //     wired by navbar.js — it has to work on /privacy/ too, where   //
+    //     this script is not loaded.                                   //
     // ================================================================ //
-    var deleteSessionBtn = document.getElementById("delete-session");
-    if (deleteSessionBtn) {
-        deleteSessionBtn.addEventListener("click", async function () {
-            var question = gettext("Delete this conversation? This cannot be undone.");
-            if (!window.confirm(question)) {
-                return;
-            }
-            try {
-                await fetch("/session/delete/", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "X-CSRFToken": getCookie("csrftoken")
-                    },
-                    body: JSON.stringify({ session_id: sessionId })
-                });
-            } catch (err) {
-                /* Network hiccup: still drop the local session below. */
-            }
-            localStorage.removeItem(STORAGE_KEY);
-            window.location.reload();
-        });
-    }
 
     formEl.addEventListener("submit", function (event) {
         event.preventDefault();

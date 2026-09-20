@@ -17,12 +17,27 @@ class MessageOut(Schema):
     created_at: datetime
 
 
+class ContactInfo(Schema):
+    """Who to answer with: the contact details the conversation has collected.
+
+    All three are optional and the UI never invents them: they come from the
+    hand-off form or from an address the recruiter typed in a message. The chat
+    page shows them back in the form (prefilled for confirmation) instead of
+    asking the recruiter to type what it already knows.
+    """
+
+    hr_name: str = ""
+    hr_email: str = ""
+    company_name: str = ""
+
+
 class HistoryOut(Schema):
     """Full persisted history of one ChatSession."""
 
     session_id: UUID
     interview_requested: bool
     messages: list[MessageOut]
+    contact: ContactInfo = Field(default_factory=ContactInfo)
 
 
 class SendIn(Schema):
@@ -49,6 +64,9 @@ class BarkleyOut(Schema):
     # Knowledge-base labels the reply is grounded in (already validated against
     # the retrieved chunks, so an invented label can never appear here).
     sources: list[str] = []
+    # What the conversation knows about the recruiter (see ContactInfo): the UI
+    # uses it to prefill the hand-off form for confirmation.
+    contact: ContactInfo = Field(default_factory=ContactInfo)
 
 
 class ContactIn(Schema):

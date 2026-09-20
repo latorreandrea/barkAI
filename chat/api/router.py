@@ -16,12 +16,17 @@ from ninja.errors import HttpError
 from chat.api.schemas import (
     BarkleyOut,
     ContactIn,
+    ContactInfo,
     ContactOut,
     HistoryOut,
     MessageOut,
     SendIn,
 )
-from chat.interviews import capture_interview_request, last_user_message
+from chat.interviews import (
+    capture_interview_request,
+    extract_contact,
+    last_user_message,
+)
 from chat.models import ChatMessage, ChatSession
 from chat.notifications import notify_interview_requested
 from chat.services import generate_reply
@@ -48,6 +53,15 @@ def _get_or_create_session(session_id: UUID) -> ChatSession:
     product requirement of friction-free, persistent conversations.
     """
     return ChatSession.objects.get_or_create(session_id=session_id)[0]
+
+
+def _contact_out(session: ChatSession) -> ContactInfo:
+    """What the conversation knows about the recruiter (all three optional)."""
+    return ContactInfo(
+        hr_name=session.hr_name or "",
+        hr_email=session.hr_email or "",
+        company_name=session.company_name or "",
+    )
 
 
 def _client_ip(request) -> str:
@@ -81,6 +95,7 @@ def get_chat_history(request, session_id: UUID) -> HistoryOut:
         session_id=session.session_id,
         interview_requested=session.interview_requested,
         messages=[_serialize_message(message) for message in session.messages.all()],
+        contact=_contact_out(session),
     )
 
 
@@ -104,6 +119,14 @@ def send_message(request, payload: SendIn) -> BarkleyOut:
         sender=ChatMessage.Sender.USER,
         content=payload.message.strip(),
     )
+
+    # 1b) The agent asks for name, email and company in the same reply that flags
+    #     an interview, so recruiters often just *write* their address in the
+    #     chat. Remember the first one we see (no LLM call involved): the hand-off
+    #     form shows it prefilled for confirmation, and Andrea's notification can
+    #     go out without waiting for the form to be submitted.
+    if not session.hr_email:
+        session.hr_email = extract_contact(payload.message).get("hr_email", "")
 
     # 2) Hand the model the previous turns (chronological, excluding the one we
     #    just stored) so BarklAI keeps the conversation context.
@@ -136,7 +159,7 @@ def send_message(request, payload: SendIn) -> BarkleyOut:
         interview_request = capture_interview_request(
             session,
             hr_name=payload.hr_name,
-            hr_email=payload.hr_email,
+            hr_email=payload.hr_email or session.hr_email,
             company_name=payload.company_name,
             message=payload.message,
             language=get_language() or "",
@@ -153,6 +176,7 @@ def send_message(request, payload: SendIn) -> BarkleyOut:
         interview_requested=session.interview_requested,
         suggest_questions=result.suggest_questions,
         sources=list(result.sources),
+        contact=_contact_out(session),
     )
 
 

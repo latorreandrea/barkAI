@@ -293,6 +293,13 @@ contact form revealed ───▶ POST /api/chat/contact   (no LLM call, so it 
 * **`POST /api/chat/contact`** — validates the email (`validate_email`, no new dependency), captures
   and notifies. It deliberately does **not** call the model, so leaving the details costs nothing and
   needs no further chat message.
+* **Prefilled confirmation** — the agent asks for name, email and company in the same reply that flags the
+  interview, so recruiters often just *write* the address in the chat. `extract_contact()`
+  (`chat/interviews.py`, a regex — no LLM call) remembers the first one it sees, and both API responses
+  hand the known details back as `contact`. The form therefore opens **prefilled** — the recruiter
+  confirms or corrects instead of retyping (`Confirm my details` instead of `Save my details`, both
+  translated) — it never overwrites a field they have edited, and it steps out of the way while BarklAI
+  answers so a pending hand-off cannot cover his reply.
 * **Notification** (`chat/notifications.py`) — `send_mail` to `INTERVIEW_NOTIFY_EMAIL` with the
   recruiter's details, the triggering message and an admin deep link; the outcome is stamped on the
   row. It is idempotent, never raises into the request cycle, and
@@ -700,13 +707,13 @@ Interactive docs are served by Django Ninja at `/api/docs` (raw OpenAPI schema a
 ### GET /api/chat/history/{session_id}
 
 Returns the persisted conversation for the session, creating it if it does not exist yet.
-Response: `{session_id, interview_requested, messages: [{id, sender, content, sources, created_at}]}` — `sources` are the citations stored with each BarklAI reply (always `[]` on a recruiter turn).
+Response: `{session_id, interview_requested, messages: [{id, sender, content, sources, created_at}], contact: {hr_name, hr_email, company_name}}` — `sources` are the citations stored with each BarklAI reply (always `[]` on a recruiter turn), and `contact` is what the conversation already knows about the recruiter, so the hand-off form can open prefilled (see [Interview hand-off](#interview-hand-off)).
 
 ### POST /api/chat/send
 
 Persists the recruiter turn, generates BarklAI's reply and persists it too.
 Request body: `{session_id, message, hr_name?, hr_email?, company_name?}`.
-Response: `{session_id, reply, barkley_state, interview_requested, suggest_questions, sources}` — `barkley_state` drives the mascot clip (e.g. `speaking`, `celebrating`, `searching`) and `suggest_questions` tells the UI to offer the quick-question chips. `sources` lists the knowledge-base labels the reply is grounded in, already validated against the retrieved chunks (see [Cited sources](#cited-sources)), and is persisted with the assistant message. Validation: `message` is capped at 2000 characters (`422` when exceeded) and the endpoint is rate-limited (`429`) per session and per IP. When `interview_requested` is true the session also gets an `InterviewRequest` row, and the notification goes out immediately if the payload already carried an email.
+Response: `{session_id, reply, barkley_state, interview_requested, suggest_questions, sources, contact}` — `barkley_state` drives the mascot clip (e.g. `speaking`, `celebrating`, `searching`) and `suggest_questions` tells the UI to offer the quick-question chips. `sources` lists the knowledge-base labels the reply is grounded in, already validated against the retrieved chunks (see [Cited sources](#cited-sources)), and is persisted with the assistant message. `contact` echoes back the details the conversation knows (see [Interview hand-off](#interview-hand-off)), including an address the recruiter typed in the message itself. Validation: `message` is capped at 2000 characters (`422` when exceeded) and the endpoint is rate-limited (`429`) per session and per IP. When `interview_requested` is true the session also gets an `InterviewRequest` row, and the notification goes out immediately if the payload — or the message — already carried an email.
 
 ### POST /api/chat/contact
 
@@ -826,7 +833,7 @@ npm run css:build                   # rebuild static/css/barkai.css after templa
 python manage.py test
 ```
 
-The suite (`chat/tests.py`, **101 tests**) covers: the index view; the history endpoint; `send` persisting both turns; the interview flag; the agent service with the **Groq client mocked** (JSON parsing, friendly fallbacks, the bilingual offline heuristics, the **language guard** — retry once, keep the first answer if the retry also fails, skip the retry when the languages match, honour `AGENT_LANGUAGE_GUARD=False` — and the **JSON-mode salvage** of a refused prose answer); `detect_language()` itself; the citation plumbing (a fabricated label is dropped, the API returns and persists `sources`, user turns carry none); the golden-set evaluator (file shape, both languages, PASS/FAIL reasons); retrieval (profile always injected, profile never searched, per-source diversity cap); the interview hand-off (capture rules including the corrected-email case, the `/api/chat/contact` endpoint, the notification email in a locmem outbox, "never notified twice", details stored even with notifications disabled, cascade on erasure); the guardrails (2000-character cap → `422`, throttle → `429`, `0` disables it); the knowledge commands (`sync_knowledge` incl. the `GITHUB_EXCLUDE_REPOS` filter and `--prune`, `build_index` chunking + hash idempotency, `knowledge_status` coverage/staleness/exit codes, `purge_old_sessions`); the i18n switching (browser detection, session toggle, JS catalogue); the scheduled-jobs chain (step order, failure aggregation, the `SystemExit` case, warning markers, `--no-prune`, `--dry-run`); the GDPR surface (privacy notice, erasure endpoint); and the `403`/`404`/`500` pages.
+The suite (`chat/tests.py`, **112 tests**) covers: the index view; the history endpoint; `send` persisting both turns; the interview flag; the agent service with the **Groq client mocked** (JSON parsing, friendly fallbacks, the bilingual offline heuristics, the **language guard** — retry once, keep the first answer if the retry also fails, skip the retry when the languages match, honour `AGENT_LANGUAGE_GUARD=False` — and the **JSON-mode salvage** of a refused prose answer); `detect_language()` itself; the citation plumbing (a fabricated label is dropped, the API returns and persists `sources`, user turns carry none); the golden-set evaluator (file shape, both languages, PASS/FAIL reasons); retrieval (profile always injected, profile never searched, per-source diversity cap); the interview hand-off (capture rules including the corrected-email case, the `/api/chat/contact` endpoint, the notification email in a locmem outbox, "never notified twice", details stored even with notifications disabled, cascade on erasure, the address extraction from a message and the `contact` echo the form prefills from); the guardrails (2000-character cap → `422`, throttle → `429`, `0` disables it); the knowledge commands (`sync_knowledge` incl. the `GITHUB_EXCLUDE_REPOS` filter and `--prune`, `build_index` chunking + hash idempotency, `knowledge_status` coverage/staleness/exit codes, `purge_old_sessions`); the i18n switching (browser detection, session toggle, JS catalogue); the scheduled-jobs chain (step order, failure aggregation, the `SystemExit` case, warning markers, `--no-prune`, `--dry-run`); the GDPR surface (privacy notice, erasure endpoint, the footer button rendered once and on every page, its Danish copy); and the `403`/`404`/`500` pages.
 
 ### Evaluation (live, on demand)
 
@@ -1064,9 +1071,11 @@ python manage.py eval_agent           # live score, non-zero exit on failure
 
 BarkAI is built GDPR-aware (a Danish/EU audience), and the pieces are concrete rather than aspirational:
 
-* **Transparency** — a plain-language **privacy notice** at `/privacy/` (English/Danish), linked from the footer and from the chat composer.
+* **Transparency** — a plain-language **privacy notice** at `/privacy/` (English/Danish), linked from the site footer that every page shares.
 * **No training on your data** — Groq and Cloudflare Workers AI do **not** train on the content they process, so no consent checkbox is needed for the chat itself.
-* **Right to erasure** — the *"Delete my conversation"* button calls `POST /session/delete/`; the session, its messages and its `InterviewRequest` records (which cascade) are deleted immediately.
+* **Right to erasure** — the *"Delete my conversation"* button sits in the site footer (wired by
+  `navbar.js`, so it works on `/privacy/` too) and calls `POST /session/delete/`; the session, its
+  messages and its `InterviewRequest` records (which cascade) are deleted immediately.
 * **Minimisation / retention** — `python manage.py purge_old_sessions` deletes conversations older than `SESSION_RETENTION_DAYS` (default 90).
 
 > Plain-language engineering notes, **not legal advice**: have the notice and the processing register reviewed before real production use.
@@ -1123,7 +1132,7 @@ Schedule it (cron / Cloud Scheduler) so reality matches the privacy notice.
 ### Data-subject rights
 
 * **Access** — the conversation is visible in the chat (and in the Django admin).
-* **Erasure** — the *"Delete my conversation"* button on the chat page calls `POST /session/delete/` with the session UUID and deletes the session (and its messages) immediately. `purge_old_sessions` handles the rest by age.
+* **Erasure** — the *"Delete my conversation"* button in the site footer calls `POST /session/delete/` with the session UUID and deletes the session (and its messages) immediately. `purge_old_sessions` handles the rest by age.
 * **Rectification / portability / objection** — handled manually via the contact address below.
 
 ### Transfers outside the EU

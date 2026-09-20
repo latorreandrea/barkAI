@@ -12,5 +12,13 @@
         ·
         <a href="{% url 'chat:privacy' %}"
            class="font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline">{% trans "Privacy" %}</a>
+        ·
+        {# GDPR right to erasure, on every page: navbar.js is what wires it     #}
+        {# (chat.js only runs on the chat screen). The confirm text travels in  #}
+        {# a data attribute so it stays in the Django catalogue, and the button #}
+        {# hides itself when there is no conversation to erase.                 #}
+        <button type="button" id="delete-session"
+                data-confirm-message="{% trans 'Delete this conversation? This cannot be undone.' %}"
+                class="font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline">{% trans "Delete my conversation" %}</button>
     </p>
 </footer>

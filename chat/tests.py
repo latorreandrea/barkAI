@@ -22,7 +22,7 @@ from django.views import defaults
 from barkai.context_processors import asset_version
 from chat.embeddings import EmbeddingError
 from chat.evals import evaluate_case, load_golden_set, validate_golden_set
-from chat.interviews import capture_interview_request, mark_notified
+from chat.interviews import capture_interview_request, extract_contact, mark_notified
 from chat.models import (
     ChatMessage,
     ChatSession,
@@ -59,6 +59,20 @@ class IndexViewTests(TestCase):
         self.assertContains(response, f"/static/css/chat.css?v={token}")
         self.assertContains(response, f"/static/js/chat.js?v={token}")
         self.assertContains(response, f'data-asset-version="{token}"')
+
+    def test_the_erasure_button_is_rendered_once(self):
+        # One button, in the footer: the composer keeps its clutter out of the
+        # way, and a duplicated id would make the JS bind the wrong element.
+        response = self.client.get(reverse("chat:index"))
+        self.assertEqual(response.content.decode().count('id="delete-session"'), 1)
+
+    def test_the_hand_off_button_offers_both_labels(self):
+        # chat.js swaps the label: "Save" while the visitor is typing the details,
+        # "Confirm" when the form opens prefilled with what the chat collected.
+        # Both strings live in the Django catalogue so both are translated.
+        response = self.client.get(reverse("chat:index"))
+        self.assertContains(response, 'data-save-label="Save my details"')
+        self.assertContains(response, 'data-confirm-label="Confirm my details"')
 
 
 class AssetVersionTests(TestCase):
@@ -97,6 +111,35 @@ class ChatApiTests(TestCase):
         payload = response.json()
         self.assertEqual(len(payload["messages"]), 1)
         self.assertEqual(payload["messages"][0]["content"], "Hello")
+
+    def test_an_address_typed_in_the_chat_is_collected_and_echoed(self):
+        # The agent asks for name/email/company when it flags an interview, so
+        # recruiters often just *write* the address: it is remembered without an
+        # LLM call and handed back so the form can be shown prefilled.
+        session_id = uuid4()
+        response = self.client.post(
+            self.SEND_URL,
+            data={
+                "session_id": str(session_id),
+                "message": "I'm Mette, write to mette@firma.dk please",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["contact"]["hr_email"], "mette@firma.dk")
+        session = ChatSession.objects.get(session_id=session_id)
+        self.assertEqual(session.hr_email, "mette@firma.dk")
+
+    def test_history_reports_the_contact_it_already_knows(self):
+        # A page reload must not lose what the conversation collected: the form
+        # opens prefilled from the history response.
+        session = ChatSession.objects.create(hr_name="Mette", hr_email="mette@firma.dk")
+        response = self.client.get(self.HISTORY_URL.format(session.session_id))
+        self.assertEqual(
+            response.json()["contact"],
+            {"hr_name": "Mette", "hr_email": "mette@firma.dk", "company_name": ""},
+        )
 
     def test_send_persists_both_turns(self):
         session_id = uuid4()
@@ -352,6 +395,18 @@ class PrivacyTests(TestCase):
     def test_privacy_notice_is_danish_for_danish_browsers(self):
         response = self.client.get(reverse("chat:privacy"), HTTP_ACCEPT_LANGUAGE="da")
         self.assertContains(response, "Privatlivspolitik")
+        # The erasure sentence points at the footer now, so the Danish catalogue
+        # has to follow the English string (locale/da/LC_MESSAGES/django.po).
+        self.assertContains(response, "i footeren")
+
+    def test_the_erasure_button_is_in_the_footer_of_every_page(self):
+        # It used to sit in the chat composer: it belongs to the shared footer,
+        # where a visitor who came to read the notice can also use it. navbar.js
+        # (not chat.js, which the privacy page never loads) wires it.
+        for url in (reverse("chat:index"), reverse("chat:privacy")):
+            response = self.client.get(url)
+            self.assertContains(response, 'id="delete-session"')
+            self.assertContains(response, "data-confirm-message=")
 
     def test_delete_session_erases_the_conversation(self):
         session = ChatSession.objects.create()
@@ -538,6 +593,29 @@ class LanguageGuardTests(TestCase):
         self.assertTrue(result.interview_requested)
         self.assertEqual(result.barkley_state, "celebrating")
         self.assertIn("Vov", result.reply)  # the Danish fallback copy
+
+
+class ContactExtractionTests(TestCase):
+    """What the chat itself collects about the recruiter (chat/interviews.py)."""
+
+    def test_email_in_a_sentence_is_found(self):
+        found = extract_contact("Hi! I'm Mette from Firma ApS — mette@firma.dk, thanks!")
+        self.assertEqual(found["hr_email"], "mette@firma.dk")
+
+    def test_surrounding_punctuation_is_not_part_of_the_address(self):
+        self.assertEqual(extract_contact("Reach me at mette@firma.dk.")["hr_email"], "mette@firma.dk")
+        self.assertEqual(extract_contact("(mette@firma.dk)")["hr_email"], "mette@firma.dk")
+
+    def test_a_multi_part_domain_is_kept_whole(self):
+        self.assertEqual(extract_contact("jane.doe+hr@acme.co.uk")["hr_email"], "jane.doe+hr@acme.co.uk")
+
+    def test_prose_without_an_address_yields_nothing(self):
+        # A name or a company written in prose is left to the form: guessing it
+        # would prefill the recruiter's confirmation form with a wrong value,
+        # and only the address is needed to answer them.
+        self.assertEqual(extract_contact("I'm Mette from Firma ApS"), {})
+        self.assertEqual(extract_contact("mette@firma"), {})
+        self.assertEqual(extract_contact(""), {})
 
 
 class InterviewRequestTests(TestCase):

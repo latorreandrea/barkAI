@@ -63,6 +63,3 @@ msgstr "Prøv venligst igen."
 
 msgid "Woof… I could not load the conversation history"
 msgstr "Vov… jeg kunne ikke indlæse samtalehistorikken"
-
-msgid "Delete this conversation? This cannot be undone."
-msgstr "Vil du slette denne samtale? Det kan ikke fortrydes."
