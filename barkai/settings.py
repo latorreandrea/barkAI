@@ -237,7 +237,8 @@ def _asset_version_default() -> str:
     deploy that rebuilds them, or when a clip is replaced in place. A deploy that
     changes nothing keeps the same token, so the cached copy stays cached, and
     nothing has to be remembered by hand (a missed manual bump would silently
-    serve the previous CSS for a year).
+    serve the previous CSS for a year). It is read once, at import time: a process
+    restart is what picks up files that changed under a running server.
     """
     newest = 0.0
     for root in (STATIC_ROOT, *STATICFILES_DIRS):
