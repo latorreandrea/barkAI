@@ -111,6 +111,9 @@ his voice (playful, a little cheeky, never robotic) keeps a technical conversati
 Each reaction is a short, loop-friendly **MP4** under `static/mascot/`, swapped by the UI according
 to BarklAI's state: `idle`, `sniffing`, `searching`, `typing`, `speaking`, `celebrating`. The clips
 blend straight into the white page (no border, no circle) and are encoded H.264 + yuv420p for the web.
+The exported files are 16:9 with the vertical take pillarboxed in black, so the player crops those
+bars away with `object-cover` inside a `472:720` box — the geometry, the numbers behind that ratio
+and the export recipe live in `static/mascot/README.md`.
 
 <!-- TODO(Andrea): descrivere il processo di creazione dei clip (tool/software, prompt o pipeline,
      tempistiche) e la logica delle "pose" per ogni stato. -->
@@ -152,7 +155,7 @@ Danish question retrieve English project READMEs.
 5. **Interview-intent detection + hand-off** — decided by the agent (`interview_requested`); the session is flagged, BarklAI switches to the `celebrating` clip, a **contact form** appears in the composer, and every capture becomes an `InterviewRequest` row (who, how to reply, when) with an **email notification** to Andrea — see [Agent Hardening](#agent-hardening-v04).
 6. **On-demand question suggestions** — when the recruiter seems unsure (`suggest_questions`) or after a spell of inactivity, the UI offers quick-question chips inside the speech bubble.
 7. **Interactive Web UI** — responsive single-page chat (compact sticky header on mobile; mascot panel + chat column on desktop) styled with a single **compiled, minified Tailwind stylesheet** (`static/css/barkai.css`) and **external deferred JS** — no runtime CDN, no inline `<style>`/`<script>`, so browsers cache the assets across pages.
-8. **BarklAI reaction clips** — `idle`, `sniffing`, `searching`, `typing`, `speaking` and `celebrating` MP4s under `static/mascot/` drive the mascot animation, with an emoji fallback when a clip is missing.
+8. **BarklAI reaction clips** — `idle`, `sniffing`, `searching`, `typing`, `speaking` and `celebrating` MP4s under `static/mascot/` drive the mascot animation. The player crops the black pillarbox the files were exported with (`object-cover` in a `472:720` box) and keeps an emoji fallback when a clip is missing — see [the mascot notes](#how-the-animations-were-made).
 9. **Custom error pages** — project-level `403`, `404` and `500` templates.
 10. **Environment-driven settings** — values read from the environment only (python-dotenv is intentionally not used); blank values fall back to safe defaults, and `DEBUG` defaults to `True` for a frictionless local start.
 11. **Automated tests** — index view, chat REST API, the agent service (Groq mocked, no network), the knowledge sync + indexing commands, the i18n switching, the interview hand-off + notifications, the guardrails, the citation plumbing, the golden-set evaluator, the scheduled-jobs chain and the GDPR surface (**101 tests**; the pgvector round-trip runs only on PostgreSQL).
@@ -176,14 +179,15 @@ Danish question retrieve English project READMEs.
   - **Stream** the model's tokens into the speech bubble (SSE) instead of waiting for the full reply.
   - Send the recruiter a **confirmation email** (and optionally a booking link) so the interview loop closes on both sides.
   - A `Makefile` for the long local commands (the **Dockerfile** landed in v0.4).
-  - An **`ASSET_VERSION`** cache-buster for the mascot clips: WhiteNoise serves them with a one-year
-    cache, so replacing a clip after launch would otherwise stay invisible to returning visitors.
   - **SEO**: `sitemap.xml`, `robots.txt`, Open Graph / Twitter-card metadata and a real OG image.
 - **Latency**: answers were measured between ~2 s and ~38 s (mean ~25 s) with the current *preview* reasoning model. Switch to a faster **production** model and/or lower `GROQ_MAX_TOKENS`; SSE then hides what remains.
 - Add **push** (browser/Slack) notifications next to the email, and move the send to a background task queue so no interview turn ever waits on SMTP.
 - Add an **HNSW index** on `KnowledgeChunk.embedding` once the corpus grows.
 - `eval_agent --repeat N`: the persona is creative at `temperature=0.5`, so a wording-sensitive case can flake; repeating a case would make the score steadier.
-- Replace the placeholder mascot MP4s with real BarklAI footage.
+- Re-export the six mascot clips at the content ratio (~472:720) instead of the pillarboxed 1280x720
+  files: the black bars are ~2.2x the pixels the player actually shows, i.e. most of the ~7.5 MB the
+  mascot set weighs today (the `ASSET_VERSION` bump needed to publish them is already in place, see
+  B-008).
 - Serve production static files via `collectstatic` + WhiteNoise/CDN (the frontend is already compiled and minified).
 - Fine-tune the persona prompt and add more per-state reactions.
 
@@ -648,6 +652,7 @@ but **blank** falls back to its default, so you only set what you need.
 | `TRUST_PROXY_SSL_HEADER` | Trust `X-Forwarded-Proto` — **required behind Cloud Run/Heroku TLS termination** (default `false`). | your choice |
 | `CSRF_TRUSTED_ORIGINS` | Extra origins allowed to POST, comma-separated (e.g. `https://barkai.example.com`). | your deployment URL |
 | `WHITENOISE_MAX_AGE` | Cache lifetime for the WhiteNoise-served static files (default `31536000`). | your choice |
+| `ASSET_VERSION` | Cache-buster appended as `?v=` to every static asset (CSS, JS, mascot clips). Derived from the assets' mtimes by default, so a deploy that rebuilds them gets a fresh token on its own; export it only to pin one (e.g. the commit SHA). Without it the one-year cache would hide the change. | your choice |
 
 > For the full experience set `GROQ_API_KEY`, `DATABASE_URL` (PostgreSQL + pgvector),
 > `EMBEDDING_PROVIDER=cloudflare` with `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`,
@@ -763,7 +768,8 @@ Dockerfile               # multi-stage production image (web service + scheduled
 - **Evaluation is data, not code** — the golden set lives in `chat/evals/golden_set.json` and the matching logic in `chat/evals/__init__.py` (stdlib only). Extend the JSON whenever a new promise is made to the agent, and keep every `must_not_contain` term genuinely **absent from the corpus**.
 - **Citations are validated server-side** — the model may only name labels retrieval returned (`_sanitize_sources`); never trust a generated label, and never let it reach a recruiter unvalidated.
 - **Freshness is a job** — `knowledge_status --fail-on-stale` is what makes the corpus's age visible; schedule it next to `sync_knowledge`/`build_index`.
-- **Contractual media names** — the UI switches the mascot `<video>` to `/static/mascot/<state>.mp4`, so the clip filenames must not change (details in `static/mascot/README.md`).
+- **Contractual media names** — the UI switches the mascot `<video>` to `/static/mascot/<state>.mp4`, so the clip filenames must not change (details in `static/mascot/README.md`). The clips are 16:9 files with the vertical take pillarboxed in black, so the player crops the bars with `object-cover` inside a `472:720` box; the ratio is measured, not guessed (see B-008).
+- **Cache-bust the assets, they are cached for a year** — WhiteNoise serves `static/` with `max-age=31536000` and the non-Manifest storage keeps every URL stable, so a plain CSS/JS/clip change would reach nobody who had already visited. Every static URL therefore carries `?v={{ ASSET_VERSION }}` (`barkai.context_processors.asset_version`), a token derived from the assets themselves (`_asset_version_default` in `barkai/settings.py`), so a rebuild moves it automatically and a deploy that changes nothing keeps the cache warm. Export `ASSET_VERSION` only to pin it by hand.
 - **Internationalisation** — English is the source language; mark template strings with `{% trans %}`/`{% blocktrans %}`, Python strings with `gettext`, and JS strings with `gettext()` (served by `JavaScriptCatalog`). After editing a `.po`, compile with `python scripts/compile_messages.py` (works without gettext; `makemessages`/`compilemessages` also work where gettext is installed).
 - **RAG seam** — `chat/embeddings.py` is the only place that talks to an embedding provider, and `chat/rag.py` is the only place that queries vectors. Swapping provider or storage never touches the agent.
 - **Same model both sides** — documents and queries must be embedded with the same provider/model, otherwise the vectors are not comparable.
@@ -1183,7 +1189,7 @@ Because these are strictly necessary, no cookie banner is required; they must st
 
 ## Credits
 
-> To be populated. The current BarklAI reaction MP4s are small generated placeholder clips (see `static/mascot/README.md`) and the favicon is an inline dog-emoji SVG — both will be credited or replaced when real assets land.
+> To be populated. The BarklAI reaction MP4s are generated footage (see `static/mascot/README.md`) and the favicon is an inline dog-emoji SVG — both will be credited or replaced when the final assets land.
 
 ---
 
@@ -1208,6 +1214,7 @@ Living log of known issues and their lifecycle. New bugs are added here as they 
 | B-005 | ✅ Fixed | **Adding the `sources` field broke whole answers.** With the richer contract the model sometimes replied in prose (`… sources: []`) instead of JSON; Groq rejected it with `400 json_validate_failed` and the code treated that as a total failure, so the recruiter got "I lost the scent of my Groq brain" instead of a perfectly good answer. Caught by a live citation check, not by the mocked unit tests. | 2026-09-14 | 2026-09-14 | `_salvage_failed_generation()` recovers the refused text from `error.failed_generation`, strips the stray `sources:` line and keeps the answer (citations stay empty); the offline interview heuristic still flags intent on the salvaged prose. Covered by `JsonModeSalvageTests`. |
 | B-006 | 🔴 Active | **The first Cloud Run deploy could never start.** The container's stderr said `sh: 1: exec: gunicorn: not found`, and one second later the platform's default startup TCP probe reported `The instance was not started`. The builder installs with `pip install --target=/install`, which puts the console scripts in a subdirectory of that target, while the runtime stage copied only `site-packages` — so no `gunicorn` executable ever reached the runtime `PATH`. The image built and pushed happily because every build-time step runs as `python manage.py …`, which needs no console script, and Django was never imported, so not one environment variable was ever read. | 2026-09-19 | — | The `CMD` now runs `python -m gunicorn`, which needs no `PATH` entry at all (gunicorn's `__main__` calls the same entry point as the console script), and the build ends with a smoke test — `DEBUG=True python -m gunicorn --check-config barkai.wsgi:application`, which parses the flags *and* imports the app — so an image that cannot start fails the **build** instead of the deploy. Neither the unit suite nor `check --deploy` could have caught it: the bug lives between the build and the boot. Awaiting the rebuild that proves the container starts. |
 | B-007 | 🔴 Active | **A fresh tag could never be deployed: `Image '…:e6a55cc' not found`.** The pipeline built the image with `docker build` and published it through the `images:` block at the end of `cloudbuild.yaml` — but Cloud Build pushes those artifacts only *after* the whole build succeeds, while `deploy-service` runs *during* the build and needs the tag to be in the registry already. So the deploy step always looked for something that did not exist yet; it failed, the build failed with it, and that is precisely why the push never ran. The deadlock meant the commit that fixed B-006 could never reach Cloud Run: the service kept running the previous image. | 2026-09-19 | — | The `build` step now runs `docker build` **and** `docker push` for both tags, so the image is published before anything consumes it, and the `images:` block is gone with a comment recording why it must not come back. Verified before pushing: the extracted step script passes `bash -n` and produces both `docker push` calls with the right image reference against a stub `docker`. Awaiting the build that finally deploys the tag. |
+| B-008 | ✅ Fixed | **A black pillarbox (and a grey hairline) around the mascot.** The reaction MP4s are 1280x720 files whose real content is the vertical take in the middle, pillarboxed in black ~401 px per side — so the player painted a black rectangle around the dog on the white page. Cropping the bars with `object-cover` removed the black but left a grey column at each end of the content (x=401 ≈ 172/255, x=878 ≈ 171/255: the H.264 ringing on the black→white transition), which showed as a hairline down both sides of the player. | 2026-09-20 | 2026-09-20 | The `<video>` now sits in a `472:720` box with `object-cover object-center`, which crops to source columns x=404..875. That width is **measured**, per column, on all six clips (Chrome + `<canvas>`; no ffmpeg was available locally) instead of guessed from the 476 clean pixels: the extra 4 px are what removes both grey hairline columns, and the edge columns now read 253-255 — white on a white page. `chat.css` adds a 1 px white fade on `.js-video-shell::before/::after` as a safety net for future clips. The `ASSET_VERSION` cache-buster (`?v=` on every static asset) shipped with it, because WhiteNoise's one-year `max-age` would otherwise have kept the old stylesheet for every returning visitor. |
 
 > When a new bug is found, add a row with status 🔴 **Active**, the discovery date and a short description, then fill in the **Fixed** date and the resolution once a fix is verified.
 

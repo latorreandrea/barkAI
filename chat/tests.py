@@ -7,6 +7,7 @@ from unittest import skipUnless
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
+from django.conf import settings
 from django.core import mail
 from django.core.cache import cache
 from django.core.management import call_command
@@ -18,6 +19,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views import defaults
 
+from barkai.context_processors import asset_version
 from chat.embeddings import EmbeddingError
 from chat.evals import evaluate_case, load_golden_set, validate_golden_set
 from chat.interviews import capture_interview_request, mark_notified
@@ -45,6 +47,30 @@ class IndexViewTests(TestCase):
         response = self.client.get(reverse("chat:index"))
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "chat/index.html")
+
+    def test_static_assets_are_cache_busted(self):
+        # WhiteNoise serves these files with a one-year `max-age` and the storage
+        # is not fingerprinted, so the `?v=` token is the only thing that lets a
+        # deploy replace them for a visitor who already cached them
+        # (see ASSET_VERSION in settings).
+        response = self.client.get(reverse("chat:index"))
+        token = settings.ASSET_VERSION
+        self.assertContains(response, f"/static/css/barkai.css?v={token}")
+        self.assertContains(response, f"/static/css/chat.css?v={token}")
+        self.assertContains(response, f"/static/js/chat.js?v={token}")
+        self.assertContains(response, f'data-asset-version="{token}"')
+
+
+class AssetVersionTests(TestCase):
+    def test_context_processor_exposes_the_setting(self):
+        context = asset_version(RequestFactory().get("/"))
+        self.assertEqual(context, {"ASSET_VERSION": settings.ASSET_VERSION})
+
+    def test_token_is_never_empty(self):
+        # The token is derived from the assets themselves when ASSET_VERSION is
+        # not exported, and it must never come out empty: a bare `?v=` would stop
+        # busting the cache exactly where it matters.
+        self.assertTrue(settings.ASSET_VERSION)
 
 
 @override_settings(GROQ_API_KEY="")  # Force the offline mock: no network in CI.

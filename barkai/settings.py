@@ -124,6 +124,10 @@ TEMPLATES = [
                 "django.template.context_processors.i18n",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                # Exposes ASSET_VERSION: every static <link>/<script> appends it
+                # as `?v=` so a deployed asset change is not hidden by WhiteNoise's
+                # one-year cache (see the Static files section).
+                "barkai.context_processors.asset_version",
             ],
         },
     },
@@ -217,6 +221,38 @@ STORAGES = {
 }
 # Immutable assets are served with a one-year cache header.
 WHITENOISE_MAX_AGE = env_int("WHITENOISE_MAX_AGE", 31536000)
+
+# Cache-buster for the static assets. Every static URL in the templates carries
+# `?v={{ ASSET_VERSION }}` (exposed by barkai.context_processors.asset_version):
+# the storage backend is deliberately the non-Manifest one, so an asset URL never
+# changes when its content does, and with a one-year `max-age` the browser would
+# not even revalidate it. Without the query string a deployed frontend fix (CSS,
+# JS, mascot clips) stays invisible to anyone who already visited the site.
+def _asset_version_default() -> str:
+    """Derive the cache-busting token from the newest static asset.
+
+    Used when ASSET_VERSION is not set in the environment. It reads the mtime of
+    the files that are actually served — STATIC_ROOT once `collectstatic` has run,
+    the source folders otherwise — which moves exactly when the assets move: on a
+    deploy that rebuilds them, or when a clip is replaced in place. A deploy that
+    changes nothing keeps the same token, so the cached copy stays cached, and
+    nothing has to be remembered by hand (a missed manual bump would silently
+    serve the previous CSS for a year).
+    """
+    newest = 0.0
+    for root in (STATIC_ROOT, *STATICFILES_DIRS):
+        for pattern in ("css/*.css", "js/*.js", "mascot/*.mp4"):
+            for path in root.glob(pattern):
+                try:
+                    newest = max(newest, path.stat().st_mtime)
+                except OSError:  # pragma: no cover - unreadable file, skipped
+                    continue
+    return str(int(newest)) if newest else "dev"
+
+
+# Pin it only to override the derived token (e.g. to the commit SHA on an
+# environment where the files' timestamps are not a reliable signal).
+ASSET_VERSION = env_str("ASSET_VERSION", _asset_version_default())
 
 # --- CORS (django-cors-headers) -------------------------------------------
 CORS_ALLOWED_ORIGINS = env_csv("CORS_ALLOWED_ORIGINS")

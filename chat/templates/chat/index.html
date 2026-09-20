@@ -4,15 +4,19 @@
 {% block title %}{% trans "BarkAI — Chat with BarklAI 🐾" %}{% endblock %}
 
 {# data-session-id: optional UUID from ?session_id= ; data-media-url: /static/mascot/ #}
+{# data-asset-version: cache-buster appended to each clip URL (WhiteNoise serves #}
+{# the MP4s with a one-year cache, so a replaced clip needs a new version).      #}
 {% block body_attrs %}
     data-session-id="{{ initial_session_id|default:'' }}"
     data-media-url="{% static 'mascot/' %}"
+    data-asset-version="{{ ASSET_VERSION }}"
 {% endblock %}
 
 {% block extra_css %}
     {# Chat-page-only CSS (comic speech bubble, message hand-off transitions,  #}
     {# onboarding choreography). Loaded here so error pages never download it. #}
-    <link rel="stylesheet" href="{% static 'css/chat.css' %}">
+    {# `?v=` is the cache-buster shared with the other static assets.           #}
+    <link rel="stylesheet" href="{% static 'css/chat.css' %}?v={{ ASSET_VERSION }}">
 {% endblock %}
 
 {% block content %}
@@ -114,13 +118,24 @@
             {# here, so the string stays in the Django catalogue (not the JS one). #}
             <span id="sources-label" hidden data-label="{% trans 'Sources' %}"></span>
 
-            {# BarklAI video, shown at the MP4's own aspect ratio (the real clips  #}
-            {# are portrait ~848x1280) with no border or circle, so it blends into #}
-            {# the white page. The "Woof!" onomatopoeia pops near the end of the   #}
-            {# sniffing clip; the fallback emoji shows if a reaction clip is gone. #}
+            {# BarklAI video. The reaction MP4s are 1280x720 files whose REAL      #}
+            {# content is the vertical take, pillarboxed in black (401px per side) #}
+            {# by whatever exported them: that black frame is what showed around    #}
+            {# the dog. `aspect-[472/720]` + `object-cover` give the player the      #}
+            {# aspect ratio of the content, so it crops exactly those two bars and   #}
+            {# the dog sits straight on the white page (no re-encode, and an MP4     #}
+            {# exported natively at that ratio is left untouched because the box and #}
+            {# the file then share the same ratio). The width is 472 and not the 476 #}
+            {# of clean pixels on purpose: the H.264 black->white transition leaves  #}
+            {# one grey column at each end of the content (x=401 = #ACACAC and       #}
+            {# x=878 = #ABABAB, measured on all six clips), which would show as a    #}
+            {# hairline down both sides of the player. 472 crops to x=404..875, where #}
+            {# the edge columns are 253/255 (pure white page included). The "Woof!"  #}
+            {# onomatopoeia pops near the end of the sniffing clip; the emoji        #}
+            {# fallback shows if a reaction clip is missing.                        #}
             <div class="relative mt-6 flex w-full items-center justify-center">
                 <div class="js-video-shell relative flex items-center justify-center">
-                    <video class="js-mascot-video block h-auto max-h-[38vh] w-auto max-w-full object-contain"
+                    <video class="js-mascot-video block h-auto max-h-[38vh] w-auto max-w-full aspect-[472/720] object-cover object-center"
                            autoplay muted loop playsinline preload="auto"></video>
                     <div class="video-fallback hidden h-40 w-40 items-center justify-center text-6xl">🐶</div>
                     <div id="bark-onomatopoeia" class="comic-onomatopoeia comic-bark"
@@ -276,6 +291,6 @@
     {# JavaScript message catalog: defines the global gettext()/ngettext() used #}
     {# by chat.js for its user-facing strings (djangojs domain).               #}
     <script defer src="{% url 'javascript-catalog' %}"></script>
-    <script defer src="{% static 'js/chat.js' %}"></script>
+    <script defer src="{% static 'js/chat.js' %}?v={{ ASSET_VERSION }}"></script>
 {% endblock %}
 

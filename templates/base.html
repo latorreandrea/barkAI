@@ -21,11 +21,13 @@
     {# Core styling: Google Fonts (Inter) + ONE compiled, minified stylesheet   #}
     {# (Tailwind utilities + site-wide custom CSS). Built from static/css/       #}
     {# source.css via `npm run css:build` — no runtime CDN, no inline styles.    #}
+    {# `?v={{ ASSET_VERSION }}` is the cache-buster: the committed stylesheet's   #}
+    {# URL never changes while WhiteNoise caches it for a year.                 #}
     {% block corecss %}
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-        <link rel="stylesheet" href="{% static 'css/barkai.css' %}">
+        <link rel="stylesheet" href="{% static 'css/barkai.css' %}?v={{ ASSET_VERSION }}">
     {% endblock %}
 
     {# Per-page stylesheets hook (e.g. chat.css loaded only by the chat page). #}
@@ -36,7 +38,7 @@
         {# Shared site behaviour as a cached static file. `defer` starts the    #}
         {# download right away (head) without blocking HTML parsing, and runs   #}
         {# the script only once the DOM is ready.                               #}
-        <script defer src="{% static 'js/navbar.js' %}"></script>
+        <script defer src="{% static 'js/navbar.js' %}?v={{ ASSET_VERSION }}"></script>
     {% endblock %}
 
     {# Per-page deferred scripts hook (loaded early in <head>, executed after   #}

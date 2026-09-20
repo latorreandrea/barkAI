@@ -65,6 +65,28 @@
 .comic-sniff { font-size: clamp(3rem, 13vw, 7.5rem); }
 .comic-bark  { font-size: clamp(2.25rem, 9vw, 5rem); }
 
+/* ------------------------------------------------------------------ */
+/* Mascot stage: the reaction MP4s are 1280x720 files whose real       */
+/* content is a vertical take pillarboxed in black; the player crops    */
+/* it with `aspect-[472/720]` + `object-cover` (see the template).      */
+/* The 1px white fades below are the safety net for that crop: the      */
+/* H.264 black->white transition can leave a grey hairline on the       */
+/* outermost column of any clip, and the clip background is pure white  */
+/* there, so a 1px fade removes it without being visible itself.        */
+/* ------------------------------------------------------------------ */
+.js-video-shell::before,
+.js-video-shell::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    pointer-events: none;
+    background: #ffffff;
+}
+.js-video-shell::before { left: 0; }
+.js-video-shell::after  { right: 0; }
+
 /* The "Woof!" pops next to the mascot near the end of the sniffing clip. */
 #bark-onomatopoeia {
     position: absolute;

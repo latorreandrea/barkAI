@@ -44,6 +44,9 @@
     // 2) DOM REFERENCES                                                //
     // ================================================================ //
     var mediaUrl = bodyEl.getAttribute("data-media-url"); // e.g. "/static/mascot/"
+    // Cache-buster for the clips, mirroring the `?v=` on the CSS/JS links: the
+    // MP4s are cached for a year, so a replaced clip needs a new URL to be seen.
+    var assetVersion = bodyEl.getAttribute("data-asset-version");
     var videos = Array.prototype.slice.call(document.querySelectorAll("video.js-mascot-video"));
     var statusEls = Array.prototype.slice.call(document.querySelectorAll("[data-mascot-status]"));
     var messageListEl = document.getElementById("message-list");
@@ -94,7 +97,7 @@
         if (!STATES.hasOwnProperty(state)) {
             state = "idle";
         }
-        var src = mediaUrl + state + ".mp4";
+        var src = mediaUrl + state + ".mp4" + (assetVersion ? "?v=" + assetVersion : "");
         videos.forEach(function (video) {
             var shell = video.closest(".js-video-shell");
             if (shell) {
