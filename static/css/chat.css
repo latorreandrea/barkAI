@@ -66,13 +66,15 @@
 .comic-bark  { font-size: clamp(2.25rem, 9vw, 5rem); }
 
 /* ------------------------------------------------------------------ */
-/* Mascot stage: the reaction MP4s are 1280x720 files whose real       */
-/* content is a vertical take pillarboxed in black; the player crops    */
-/* it with `aspect-[472/720]` + `object-cover` (see the template).      */
+/* Mascot stage: the clips are the vertical take at 472x720 and the    */
+/* player's box (`aspect-[472/720]` + `object-cover`, see the template) */
+/* has that same ratio — it is what once cropped the black pillarbox    */
+/* off the 1280x720 exports, and it is kept so a clip exported with     */
+/* bars again still cannot show them.                                   */
 /* The 1px white fades below are the safety net for that crop: the      */
 /* H.264 black->white transition can leave a grey hairline on the       */
-/* outermost column of any clip, and the clip background is pure white  */
-/* there, so a 1px fade removes it without being visible itself.        */
+/* outermost column of any clip, and the clip background is ~white      */
+/* there (253-255), so a 1px fade removes it without being visible.     */
 /* ------------------------------------------------------------------ */
 .js-video-shell::before,
 .js-video-shell::after {

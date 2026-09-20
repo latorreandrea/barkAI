@@ -15,57 +15,62 @@ to `/static/mascot/<state>.mp4` based on the BarklAI state returned by the API.
 
 The clips are real footage: the filenames above are what the UI requests. The
 whole set is served from the same container as the app (see the Deployment
-section of the README), so mind the total payload — the current clips run from
-~0.5 MB (`typing`, `idle`) to ~3.3 MB (`searching`, 17 s), and re-exporting them
-at the content ratio below is what would roughly halve that.
+section of the README), so mind the total payload: the six clips weigh **3.9 MB**
+together (~0.27 MB for `typing`, ~1.77 MB for the 17 s `searching`), after being
+re-encoded at the content ratio described below — that step cut them from 7.5 MB.
 
-## Frame geometry (why the player crops)
+## Frame geometry (the 472:720 box)
 
-The current files are **1280x720**, but their real content is the **vertical
-take in the middle**: the exported frame is pillarboxed in black, 401 px per
-side. That black frame is what used to show as a black rectangle around the dog
-on the white page.
+The clips are the **vertical take**: **472x720** (DAR 59:90), the shape the player
+gives the `<video>` with `aspect-[472/720]` in `chat/templates/chat/index.html`.
+Box ratio and file ratio therefore match, and the `object-cover object-center`
+next to it has nothing left to cut.
 
-The player therefore gives the video a box with the aspect ratio of the content
-and lets `object-cover` do the cropping (`chat/templates/chat/index.html`):
-
-* `aspect-[472/720]` + `object-cover object-center` → source columns **x=404..875**.
-* 472 and not the 476 clean pixels, on purpose: the H.264 black→white transition
-  leaves a grey column at each end of the content (x=401 ≈ `#ACACAC`, x=878 ≈
-  `#ABABAB`, ~170/255), which showed as a hairline down both sides of the
-  player. The window above keeps both edge columns at 253-255, i.e. white on a
-  white page.
-* `chat.css` adds a 1 px white fade on `.js-video-shell::before/::after` as a
-  safety net, so a future clip with a darker edge column still cannot draw a line.
-
-**Consequence for new exports:** export the vertical take at its **own** ratio
-(472:720 ≈ 0.656, e.g. `scale=-2:960` → 636x960 from an 848x1280 master). Box
-ratio and file ratio then match and `object-cover` has nothing left to cut — and
-*never* force a square or 16:9 frame: that is exactly what produced the pillarbox
-(and, with it, the grey hairline).
+That ratio is fixed by the footage and measured, not guessed, because the files
+once arrived as 1280x720 exports that **pillarboxed** this take in black (401 px
+per side), which showed as a black rectangle around the dog on the white page.
+Cropping the bars back off had to stop at x=404..875 — not at the 476 columns of
+clean content — because the H.264 black→white transition leaves a grey column at
+each end (x=401 ≈ `#ACACAC`, x=878 ≈ `#ABABAB`, ~170/255) that showed as a
+hairline down both sides of the player. The clips were then re-encoded to
+472x720, so those grey columns are gone from the files too; the box keeps the
+ratio anyway, and `chat.css` keeps a 1 px white fade on
+`.js-video-shell::before/::after` as a safety net, so a future clip with a darker
+edge column still cannot draw a line.
 
 ## Recording tips
 
 * Keep them short (1-3 s) and loop-friendly: they play muted and on a loop.
-* Keep the subject a few px away from the left/right edges: `object-cover` crops
-  a couple of px per side when the file ratio is not exactly 472:720.
-* Keep the background the same white as the page (`#ffffff`): the clips are
-  drawn straight on the white stage, so an off-white background shows as a faint
-  rectangle around the dog.
-* Encode with **H.264 + `yuv420p`** for maximum browser compatibility (Safari
-  included), and start the file with the index so it plays immediately:
+* Keep the same **472:720** ratio, and the subject a few px away from the
+  left/right edges: the player crops a couple of px per side when the file ratio
+  is not exactly that. *Never* force a square or 16:9 frame — that is what
+  produced the pillarbox, and with it the grey hairline.
+* Keep the background the same white as the page (`#ffffff`): the clips are drawn
+  straight on the white stage, so an off-white background shows as a faint
+  rectangle around the dog. The current files sit at 253-255 on their edge columns.
+* Encode with **H.264 + `yuv420p`**, 24 fps, for maximum browser compatibility
+  (Safari included), and start the file with the index so it plays immediately:
 
   ```bash
-  # From the vertical master: keep its ratio, and drop the audio track (the
-  # player is muted, so it would only be dead weight).
+  # From a vertical master (e.g. 848x1280): scale to 720 px tall, then crop to the
+  # exact 472x720 the player expects (the 2-3 px it drops are background), and
+  # drop the silent audio track the old exports carried.
   ffmpeg -i source.mov -an \
-    -vf "scale=-2:960" \
-    -c:v libx264 -profile:v high -crf 30 -preset slow -r 24 \
+    -vf "scale=-2:720,crop=472:720:(iw-472)/2:0" \
+    -c:v libx264 -profile:v high -preset slow -tune animation -crf 28 \
+    -pix_fmt yuv420p -movflags +faststart idle.mp4
+
+  # Straight from one of the old 1280x720 pillarboxed exports, the crop offsets
+  # are the measured ones above and the encoder flags are the same:
+  ffmpeg -i old_1280x720.mp4 -an -vf "crop=472:720:404:0" \
+    -c:v libx264 -profile:v high -preset slow -tune animation -crf 28 \
     -pix_fmt yuv420p -movflags +faststart idle.mp4
   ```
 
-  `-crf` is the main size/quality dial (28 = safer, 32 = lighter); `-r 24` drops
-  the frame rate without a visible loss on a short loop.
+  `-crf` is the size/quality dial: 28 is visually identical to the source at this
+  size, 30 is ~20% lighter but the fur looks softer already under a 3x zoom.
+  `-tune animation` pays off on this flat cartoon artwork, and `-an` removes the
+  2 kb/s silent AAC track (the player is muted).
 
 * Replace the files **keeping the exact filenames**: `chat.js` builds the URL as
   `/static/mascot/<state>.mp4`.
