@@ -93,38 +93,334 @@
         celebrating: gettext("BarklAI found an interview opportunity! 🎉")
     };
 
+    // The state currently on screen. The composer's "typing" hold (3b) reads it
+    // to decide whether it may take the stage and what to hand back afterwards.
+    var currentMascotState = null;
+
+    // ================================================================ //
+    // 3a) VIDEO STAGE (A/B): two stacked players, one of them visible. //
+    // ================================================================ //
+    // Changing the `src` of a <video> tears its decoder down, so the element
+    // shows NOTHING until the first keyframe of the new file is decoded: that
+    // is the gap between two reaction clips (worse on a cold cache, where the
+    // download sits in front of it). The second element removes it — it
+    // pre-rolls the next clip while the one on screen keeps playing, and only
+    // replaces it once it can actually draw.
+    //
+    // All six clips start AND end on the same neutral pose, so a cut is
+    // invisible exactly when it lands on the outgoing clip's loop seam: that
+    // pose is where the incoming clip starts (it is pre-rolled on its first
+    // frame, not running, for the same reason). The cut waits for the seam
+    // while it is at hand and otherwise happens as soon as the new clip is
+    // drawable — waiting longer would hold the whole reaction back by up to a
+    // clip length (idle is 7 s, searching 17 s).
+    //
+    // The hand-over is deliberately a cut and not a cross-fade: these are
+    // hand-drawn poses on white, so blending two of them shows the dog twice.
+    // A cut that misses the seam is a pose jump, which reads as a cut; set
+    // SWAP_BLINK_MS if you would rather cover it with a 90 ms white blink.
+    var SEAM_WAIT_MS = 300;      // Give the loop this long to reach its neutral pose.
+    var SWAP_TICK_MS = 40;       // How often the cut conditions are re-checked.
+    var SWAP_BLINK_MS = 0;       // > 0: blink the stage white when the cut misses the seam.
+    // Clips the visitor is most likely to need next, fetched while the page is
+    // quiet so the first keystroke does not wait on the network.
+    var WARM_CLIPS = ["typing", "speaking"];
+    var WARM_DELAY_MS = 4000;
+
+    var frontVideo = videos[0] || null; // The element on screen.
+    var backVideo = videos[1] || null;  // The element being pre-rolled (may be absent).
+    var visibleState = null;            // State of the element on screen.
+    var pendingState = null;            // State being pre-rolled behind it.
+    var swapTimer = null;
+
+    function videoUrl(state) {
+        return mediaUrl + state + ".mp4" + (assetVersion ? "?v=" + assetVersion : "");
+    }
+
+    // The clip on screen: what the visitor sees, and what timing is measured on.
+    function visibleVideo() {
+        return frontVideo;
+    }
+
+    // The element holding a state, whether it is on screen or still pre-rolling
+    // (the onboarding reads the sniffing clip's duration to time the "Woof!").
+    function videoShowingState(state) {
+        var src = videoUrl(state);
+        if (frontVideo && frontVideo.getAttribute("src") === src) {
+            return frontVideo;
+        }
+        if (backVideo && backVideo.getAttribute("src") === src) {
+            return backVideo;
+        }
+        return null;
+    }
+
+    // `playNow` = the clip takes the stage; otherwise it is pre-rolled to its
+    // first frame (the neutral pose) and left paused, so the cut can be an
+    // exact pose match. Some engines only start decoding once play() is
+    // requested, hence the immediate pause.
+    function warmVideo(video, state, playNow) {
+        if (!video) {
+            return;
+        }
+        var src = videoUrl(state);
+        if (video.getAttribute("src") !== src) {
+            video.setAttribute("src", src);
+            video.load();
+        }
+        if (playNow) {
+            video.play()["catch"](function () {
+                // Autoplay can be blocked before the first user gesture.
+            });
+        } else {
+            // Pre-roll: decode the first frame (the neutral pose) and leave it
+            // paused. Some engines only start decoding once play() is requested,
+            // hence the immediate pause — skipped when the clip has meanwhile
+            // taken the stage, or the pre-roll would freeze the clip on screen.
+            video.play().then(function () {
+                if (video !== frontVideo) {
+                    video.pause();
+                }
+            })["catch"](function () {
+                // Pre-roll refused (autoplay policy): the cut still works.
+            });
+        }
+    }
+
+    function cancelSwap() {
+        if (swapTimer) {
+            window.clearInterval(swapTimer);
+            swapTimer = null;
+        }
+        pendingState = null;
+    }
+
+    // readyState 2 = HAVE_CURRENT_DATA: there is a frame to show (no blank box).
+    function canDraw(video) {
+        return !!video && video.readyState >= 2;
+    }
+
+    // Milliseconds left before the looping clip wraps around to its seam.
+    function seamInMs(video) {
+        if (!video || !isFinite(video.duration) || video.duration <= 0) {
+            return 0; // Length unknown: there is nothing to wait for.
+        }
+        return Math.max(0, (video.duration - video.currentTime) * 1000);
+    }
+
+    // A clip took the stage: the emoji fallback is no longer needed.
+    function markStageTaken(element) {
+        var shell = element.closest(".js-video-shell");
+        if (shell) {
+            shell.classList.remove("is-missing");
+        }
+    }
+
+    // Cover a cut that could not land on the neutral pose. The animation length
+    // is driven by the constant above, so there is a single place to tune it.
+    function blinkShell() {
+        var shell = frontVideo ? frontVideo.closest(".js-video-shell") : null;
+        if (!shell) {
+            return;
+        }
+        shell.style.setProperty("--swap-blink", SWAP_BLINK_MS + "ms");
+        shell.classList.remove("is-swapping");
+        void shell.offsetWidth; // Restart the animation.
+        shell.classList.add("is-swapping");
+        window.setTimeout(function () {
+            shell.classList.remove("is-swapping");
+        }, SWAP_BLINK_MS);
+    }
+
+    // Hand the stage over: the pre-rolled clip becomes visible on its neutral
+    // pose and starts running exactly then.
+    function swapVideos() {
+        // Tailwind's opacity utility is the switch, so the stage needs no CSS of
+        // its own — the classes come from the template.
+        frontVideo.classList.add("opacity-0");
+        backVideo.classList.remove("opacity-0");
+        var previousFront = frontVideo;
+        frontVideo = backVideo;
+        backVideo = previousFront;
+        backVideo.pause(); // The hidden element has nothing left to advance.
+        markStageTaken(frontVideo);
+        frontVideo.play()["catch"](function () {
+            // Autoplay can be blocked before the first user gesture.
+        });
+        visibleState = pendingState;
+        cancelSwap();
+    }
+
+
+    // A state was asked for: pre-roll it behind the clip on screen, then cut to
+    // it as soon as the decoder is ready (and on its seam, when that is close).
+    function stageSet(state) {
+        if (!frontVideo) {
+            return;
+        }
+        if (!backVideo || visibleState === null) {
+            // No second element, or nothing on screen yet (the very first clip):
+            // the front element is the one to load.
+            visibleState = state;
+            warmVideo(frontVideo, state, true);
+            markStageTaken(frontVideo);
+            return;
+        }
+        if (state === visibleState) {
+            // Back to what is already playing (the visitor resumed typing, say):
+            // drop the pre-roll instead of flashing the other clip.
+            cancelSwap();
+            return;
+        }
+        if (state === pendingState) {
+            return; // Already pre-rolling it.
+        }
+
+        cancelSwap();
+        pendingState = state;
+        warmVideo(backVideo, state, false);
+
+        swapTimer = window.setInterval(function () {
+            if (!canDraw(backVideo)) {
+                // Never cut to a blank frame: keep the current clip running. If
+                // the file is broken rather than slow, its error listener cancels
+                // the swap and the mascot keeps the previous reaction.
+                return;
+            }
+            var seam = seamInMs(frontVideo);
+            if (seam > 0 && seam <= SEAM_WAIT_MS) {
+                // The loop is about to reach the pose the new clip starts from:
+                // a few more milliseconds buy a cut nobody can see. The wait is
+                // bounded by SEAM_WAIT_MS, and it ends by itself on the tick
+                // after the wrap — that is, on the neutral pose.
+                return;
+            }
+            if (SWAP_BLINK_MS > 0 && seam > SEAM_WAIT_MS) {
+                blinkShell(); // This cut misses the seam: cover the pose jump.
+            }
+            swapVideos();
+        }, SWAP_TICK_MS);
+    }
+
+    // Fetch the clips the visitor is about to need, so the first keystroke does
+    // not wait on the network. Skipped when the page is hidden, when the
+    // connection is metered (saveData) or slow — and it is only an optimisation:
+    // a failed fetch changes nothing.
+    function prefetchUpcomingClips() {
+        var connection = navigator.connection;
+        if (document.hidden) {
+            return;
+        }
+        if (connection && (connection.saveData || /(^|-)2g$/.test(connection.effectiveType || ""))) {
+            return;
+        }
+        WARM_CLIPS.forEach(function (state) {
+            window.fetch(videoUrl(state), { cache: "force-cache" }).then(function (response) {
+                return response.arrayBuffer();
+            })["catch"](function () {
+                // The clip will simply be fetched when it is needed.
+            });
+        });
+    }
+
+
     function setMascotState(state) {
         if (!STATES.hasOwnProperty(state)) {
             state = "idle";
         }
-        var src = mediaUrl + state + ".mp4" + (assetVersion ? "?v=" + assetVersion : "");
-        videos.forEach(function (video) {
-            var shell = video.closest(".js-video-shell");
-            if (shell) {
-                shell.classList.remove("is-missing");
-            }
-            if (video.getAttribute("src") !== src) {
-                video.setAttribute("src", src);
-                video.load();
-                video.play()["catch"](function () {
-                    // Autoplay can be blocked before the first user gesture.
-                });
-            }
-        });
+        currentMascotState = state;
+        stageSet(state);
         statusEls.forEach(function (el) {
             el.textContent = STATES[state];
         });
     }
 
-    // When a reaction MP4 is missing, show the emoji fallback instead of a black frame.
+    // When a reaction MP4 is missing, show the emoji fallback instead of a black
+    // frame — but only when the element on screen is the broken one. A failure in
+    // the pre-rolling copy just cancels the swap, so the clip the visitor is
+    // watching keeps playing instead of being replaced by a pooch emoji.
     videos.forEach(function (video) {
         video.addEventListener("error", function () {
-            var shell = video.closest(".js-video-shell");
-            if (shell) {
-                shell.classList.add("is-missing");
+            if (video === frontVideo || visibleState === null) {
+                var shell = video.closest(".js-video-shell");
+                if (shell) {
+                    shell.classList.add("is-missing");
+                }
+            } else if (video === backVideo) {
+                cancelSwap();
             }
         });
     });
+
+    // ================================================================ //
+    // 3b) COMPOSER TYPING: while the VISITOR writes a message the      //
+    //     mascot plays the "typing" clip, and hands the stage back a   //
+    //     moment after the keys stop.                                  //
+    // ================================================================ //
+    // Detection is the `input` event on the composer (wired at the bottom):
+    // it is the one event that also fires for paste, cut, drag & drop,
+    // autofill, dictation and phone keyboards, it never fires for Shift,
+    // arrows or a held modifier (a `keydown` handler would), and it never
+    // hands us the characters themselves — nothing here wants to read
+    // `event.key`. Composition/IME typing reports it too, so no `keydown`
+    // fallback is needed.
+    //
+    // The hold keeps the clip looping for the whole burst instead of
+    // restarting it on every keystroke (see noteComposerTyping).
+    var TYPING_HOLD_MS = 1200;
+    var composerTyping = false;
+    var typingHoldTimer = null;
+    var stateBeforeTyping = "idle";
+
+    // The stage belongs to BarklAI whenever he is mid-turn (his composer is
+    // disabled while he searches/speaks) or still sniffing the newcomer: a
+    // visitor typing there must not cut the scripted onboarding short. A
+    // hidden page and the expanded history view hide the stage entirely, so
+    // there is nothing to switch.
+    function mascotStageIsFree() {
+        if (document.hidden || currentMascotState === "sniffing") {
+            return false;
+        }
+        if (formEl.dataset.busy === "true") {
+            return false;
+        }
+        return !(chatLayoutEl && chatLayoutEl.classList.contains("is-history-expanded"));
+    }
+
+    // Back to whatever was on screen before the visitor started writing. The
+    // state is only touched while "typing" is still the current one, so a
+    // reply that arrived meanwhile (or an explicit setMascotState) wins.
+    function stopComposerTyping(restore) {
+        if (typingHoldTimer) {
+            window.clearTimeout(typingHoldTimer);
+            typingHoldTimer = null;
+        }
+        if (!composerTyping) {
+            return;
+        }
+        composerTyping = false;
+        if (restore !== false && currentMascotState === "typing") {
+            setMascotState(stateBeforeTyping);
+        }
+    }
+
+    // Called on every input event: the first one enters the state, the next
+    // ones only push the "keys stopped" deadline forward.
+    function noteComposerTyping() {
+        if (typingHoldTimer) {
+            window.clearTimeout(typingHoldTimer);
+        }
+        typingHoldTimer = window.setTimeout(function () {
+            typingHoldTimer = null;
+            stopComposerTyping();
+        }, TYPING_HOLD_MS);
+        if (composerTyping || !mascotStageIsFree()) {
+            return;
+        }
+        stateBeforeTyping = currentMascotState || "idle";
+        composerTyping = true;
+        setMascotState("typing");
+    }
 
     // ================================================================ //
     // 4) SPEECH BUBBLE (the "live" comic nuvoletta).                   //
@@ -618,7 +914,10 @@
     function startSniffingSequence() {
         setMascotState("sniffing");
 
-        var video = videos[0];
+        // The element that carries the sniffing clip: it may still be the hidden
+        // one while the stage hands over, and it is the playback that times the
+        // "Woof!".
+        var video = videoShowingState("sniffing") || videos[0];
         var barkFired = false;
         var messageStarted = false;
 
@@ -760,6 +1059,8 @@
         onboardingBusy = false;
 
         inputEl.value = "";
+        // The visitor is done writing: the request owns the clip from here.
+        stopComposerTyping(false);
         setBusy(true);
 
         // Snapshot the hand-off form before the request: it may be hidden again
@@ -895,6 +1196,10 @@
 
         // Once the chat is quiet, wait a while before BarklAI nudges with ideas.
         armIdleTimer();
+
+        // ...and fetch the clips he is most likely to need next, so the first
+        // reaction does not wait on the network (see 3a).
+        window.setTimeout(prefetchUpcomingClips, WARM_DELAY_MS);
 
         if (!isFirstVisit && inputEl && !inputEl.disabled) {
             inputEl.focus();
@@ -1050,16 +1355,20 @@
 
     wireSuggestions();
 
-    // Typing counts as activity: restart the idle countdown, and start the
-    // "long draft" clock while a non-empty message sits in the composer.
+    // Typing counts as activity: restart the idle countdown, start the
+    // "long draft" clock while a non-empty message sits in the composer, and
+    // let the mascot answer the visitor who is writing (3b). The `input` event
+    // is what makes this work for paste, dictation and phone keyboards too.
     inputEl.addEventListener("input", function () {
         armIdleTimer();
         if (inputEl.value.trim() !== "") {
             if (!typingTimer) {
                 armTypingTimer();
             }
+            noteComposerTyping();
         } else {
             clearTypingTimer();
+            stopComposerTyping();
         }
     });
 

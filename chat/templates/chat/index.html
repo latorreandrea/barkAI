@@ -63,8 +63,13 @@
         </section>
 
         <!-- ============ MIDDLE: BARKLAI STAGE + LIVE SPEECH BUBBLE ============ -->
+        {# Packed to the bottom, not centred: the bubble above the dog grows with  #}
+        {# every reply (one line, then max-h-32, then 14rem with the chips), so    #}
+        {# centring the column used to drag the dog up and down with it. Anchored  #}
+        {# to the bottom he stays put, the bubble grows upwards instead, and his   #}
+        {# feet stop sliding behind the composer.                                  #}
         <section id="mascot-stage" aria-label="{% trans 'BarklAI — live speech bubble' %}"
-                 class="relative z-20 flex min-h-0 flex-1 flex-col items-center justify-center
+                 class="relative z-20 flex min-h-0 flex-1 flex-col items-center justify-end
                         bg-white px-4 pb-3 pt-5 md:pt-6">
 
             {# Spotlight glow behind the mascot. Declared as the first child so  #}
@@ -133,8 +138,15 @@
             {# missing.                                                            #}
             <div class="relative mt-6 flex w-full items-center justify-center">
                 <div class="js-video-shell relative flex items-center justify-center">
+                    {# Two stacked players (A/B). The first one sits in the flow and #}
+                    {# defines the box; the second is a transparent overlay that JS #}
+                    {# pre-rolls with the next clip and reveals only once it can    #}
+                    {# draw — swapping the `src` alone blanks the stage, because the #}
+                    {# decoder has no frame to show until the new file is ready.    #}
                     <video class="js-mascot-video block h-auto max-h-[38vh] w-auto max-w-full aspect-[472/720] object-cover object-center"
                            autoplay muted loop playsinline preload="auto"></video>
+                    <video class="js-mascot-video absolute inset-0 h-full w-full opacity-0 object-cover object-center"
+                           muted loop playsinline preload="auto" aria-hidden="true"></video>
                     <div class="video-fallback hidden h-40 w-40 items-center justify-center text-6xl">🐶</div>
                     <div id="bark-onomatopoeia" class="comic-onomatopoeia comic-bark"
                          aria-hidden="true">{% trans "Woof!" %}</div>

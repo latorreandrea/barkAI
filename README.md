@@ -109,11 +109,25 @@ his voice (playful, a little cheeky, never robotic) keeps a technical conversati
 ### How the animations were made
 
 Each reaction is a short, loop-friendly **MP4** under `static/mascot/`, swapped by the UI according
-to BarklAI's state: `idle`, `sniffing`, `searching`, `typing`, `speaking`, `celebrating`. The clips
+to BarklAI's state: `idle`, `sniffing`, `searching`, `typing`, `speaking`, `celebrating`. Five of them
+are his own states; `typing` is the **visitor's**: it plays while a message is being written in the
+composer — detected client-side on the `input` event, so paste, dictation and phone keyboards count
+too — and it hands the stage back 1.2 s after the keys stop (the details are in the comment above
+`noteComposerTyping()` in `static/js/chat.js`). The clips
 blend straight into the white page (no border, no circle) and are H.264 + yuv420p at 24 fps. They are
 the **vertical take at 472x720** (the shape the player crops to with `object-cover` inside a `472:720`
 box), re-encoded from 1280x720 exports that pillarboxed it in black — geometry, numbers and the export
 recipe live in `static/mascot/README.md`.
+
+Two details there are load-bearing rather than cosmetic:
+
+* every clip **starts and ends on the same neutral pose**. The player hands the stage over with a cut, and
+  it lands that cut on the outgoing clip's loop seam whenever the seam is at hand — that shared pose is
+  what makes the hand-over invisible (waiting for a distant one would delay the reaction by seconds);
+* the player is a **two-element A/B stage** (`static/js/chat.js`, section 3a). Swapping the `src` of a
+  single `<video>` tears its decoder down, and the element draws nothing until the new file's first
+  keyframe arrives: the second element pre-rolls the next clip (paused, on its first frame) while the one
+  on screen keeps playing, and only replaces it once it can draw.
 
 <!-- TODO(Andrea): descrivere il processo di creazione dei clip (tool/software, prompt o pipeline,
      tempistiche) e la logica delle "pose" per ogni stato. -->
@@ -155,7 +169,7 @@ Danish question retrieve English project READMEs.
 5. **Interview-intent detection + hand-off** — decided by the agent (`interview_requested`); the session is flagged, BarklAI switches to the `celebrating` clip, a **contact form** appears in the composer, and every capture becomes an `InterviewRequest` row (who, how to reply, when) with an **email notification** to Andrea — see [Agent Hardening](#agent-hardening-v04).
 6. **On-demand question suggestions** — when the recruiter seems unsure (`suggest_questions`) or after a spell of inactivity, the UI offers quick-question chips inside the speech bubble.
 7. **Interactive Web UI** — responsive single-page chat (compact sticky header on mobile; mascot panel + chat column on desktop) styled with a single **compiled, minified Tailwind stylesheet** (`static/css/barkai.css`) and **external deferred JS** — no runtime CDN, no inline `<style>`/`<script>`, so browsers cache the assets across pages.
-8. **BarklAI reaction clips** — `idle`, `sniffing`, `searching`, `typing`, `speaking` and `celebrating` MP4s under `static/mascot/` drive the mascot animation: the vertical 472x720 take, cropped in a `472:720` box (`object-cover`), with an emoji fallback when a clip is missing — see [the mascot notes](#how-the-animations-were-made).
+8. **BarklAI reaction clips** — `idle`, `sniffing`, `searching`, `typing`, `speaking` and `celebrating` MP4s under `static/mascot/` drive the mascot animation: the vertical 472x720 take, cropped in a `472:720` box (`object-cover`), swapped on a two-element stage so the hand-over never blanks or blinks, with an emoji fallback when a clip is missing. `typing` is the visitor's own state — it reacts to the message being written in the composer — see [the mascot notes](#how-the-animations-were-made).
 9. **Custom error pages** — project-level `403`, `404` and `500` templates.
 10. **Environment-driven settings** — values read from the environment only (python-dotenv is intentionally not used); blank values fall back to safe defaults, and `DEBUG` defaults to `True` for a frictionless local start.
 11. **Automated tests** — index view, chat REST API, the agent service (Groq mocked, no network), the knowledge sync + indexing commands, the i18n switching, the interview hand-off + notifications, the guardrails, the citation plumbing, the golden-set evaluator, the scheduled-jobs chain and the GDPR surface (**101 tests**; the pgvector round-trip runs only on PostgreSQL).
@@ -531,7 +545,7 @@ The repository is a Django project with a thin surface: `barkai/` holds the sett
 
 1. The recruiter opens the chat; the browser creates a `session_id` (UUID) or reuses the `?session_id=` from a shared link.
 2. On load the UI calls `GET /api/chat/history/{session_id}` and renders the persisted conversation (the session is created on first contact).
-3. Sending a message issues a CSRF-protected `POST /api/chat/send`.
+3. Sending a message issues a CSRF-protected `POST /api/chat/send`. Drafts stay in the browser: the mascot switches to the `typing` clip while the message is written (a local state — the server never sees a draft, and the API contract is unchanged).
 4. With **RAG enabled** the message is embedded (`chat/embeddings.py`) and the closest chunks are fetched from `KnowledgeChunk` (`chat/rag.py`); otherwise the whole `KnowledgeDocument` corpus is used. Either way the router persists the user turn, rebuilds the conversation history and delegates the reply to `chat.services.generate_reply()`, which asks **Groq** (JSON mode) for a structured answer.
 5. The API responds with `{reply, barkley_state, interview_requested, suggest_questions}`; the UI switches BarklAI's reaction clip (`searching` while working, `speaking` for the answer, `celebrating` for interview requests) and, when `suggest_questions` is true, offers the quick-question chips inside the bubble.
 6. The active language comes from `Accept-Language` (or the navbar toggle), so both the UI copy and the agent's answer follow the recruiter's language — and the reply is guarded against language drift (see [Language parity](#language-parity-en-and-da)).

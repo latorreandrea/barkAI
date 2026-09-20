@@ -9,7 +9,7 @@ to `/static/mascot/<state>.mp4` based on the BarklAI state returned by the API.
 | `idle.mp4`          | Default state while waiting for the recruiter      |
 | `sniffing.mp4`      | First-visit onboarding: BarklAI approaches the visitor |
 | `searching.mp4`     | While the API/agent is working on a reply          |
-| `typing.mp4`        | Alternative "working" clip (ready to use)          |
+| `typing.mp4`        | While the visitor is writing in the composer       |
 | `speaking.mp4`      | BarklAI delivering his answer                      |
 | `celebrating.mp4`   | An interview has been requested 🎉                 |
 
@@ -18,6 +18,24 @@ whole set is served from the same container as the app (see the Deployment
 section of the README), so mind the total payload: the six clips weigh **3.9 MB**
 together (~0.27 MB for `typing`, ~1.77 MB for the 17 s `searching`), after being
 re-encoded at the content ratio described below — that step cut them from 7.5 MB.
+
+## The neutral pose is part of the contract
+
+Every clip **starts and ends on the same neutral pose** (and holds it for a moment at both ends). The
+player hands the stage over with a hard cut — a cross-fade would show the dog twice, since these are
+hand-drawn poses on white — and it lands that cut on the outgoing clip's loop seam whenever the seam is
+within a few hundred milliseconds. The shared pose is what makes the cut invisible: a clip that starts
+mid-action, or ends somewhere else, would make every hand-over snap.
+
+The player itself is in `static/js/chat.js` (section 3a): **two stacked `<video>` elements**, because
+changing the `src` of a single one tears its decoder down and the stage draws nothing until the new file's
+first keyframe arrives. The hidden element pre-rolls the next clip — paused, on its first frame — while
+the one on screen keeps playing, and replaces it only once it can draw, so a clip change costs a frame
+instead of a gap. `typing` is switched from the composer's `input` event (see 3b in the same file),
+`SWAP_BLINK_MS` can cover a cut that missed the seam with a white blink, and the two clips the visitor is
+most likely to need next are fetched while the page is quiet. A clip that fails to load does not blank the
+stage: the hand-over is cancelled and the mascot keeps the previous reaction (the emoji fallback shows
+when there is nothing else to show).
 
 ## Frame geometry (the 472:720 box)
 

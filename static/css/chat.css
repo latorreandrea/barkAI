@@ -89,6 +89,21 @@
 .js-video-shell::before { left: 0; }
 .js-video-shell::after  { right: 0; }
 
+/* Player hand-over (see section 3a in chat.js): the two <video>s are swapped
+ * with an opacity class, so the stage itself needs no CSS of its own — except
+ * this optional blink, which covers a cut that could not land on the neutral
+ * pose. chat.js sets `--swap-blink` from its SWAP_BLINK_MS constant, and the
+ * reduced-motion block below collapses the animation to nothing if asked. */
+.js-video-shell.is-swapping::after {
+    width: 100%;
+    animation: swapBlink var(--swap-blink, 90ms) linear forwards;
+}
+@keyframes swapBlink {
+    from { opacity: 0; }
+    50%  { opacity: 1; }
+    to   { opacity: 0; }
+}
+
 /* The "Woof!" pops next to the mascot near the end of the sniffing clip. */
 #bark-onomatopoeia {
     position: absolute;
