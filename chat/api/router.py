@@ -30,7 +30,7 @@ from chat.interviews import (
 )
 from chat.models import ChatMessage, ChatSession
 from chat.notifications import notify_interview_requested
-from chat.services import generate_reply
+from chat.services import generate_reply, mentions_interview
 from chat.throttle import too_many_requests
 
 router = Router(tags=["chat"])
@@ -191,6 +191,12 @@ def send_message(request, payload: SendIn) -> BarkleyOut:
         reply=result.reply,
         barkley_state=result.barkley_state,
         interview_requested=session.interview_requested,
+        # A *fresh* request, for the hand-off form: the model's flag for this turn
+        # OR the message itself asking for an interview in plain words. The second
+        # half is a deterministic backstop, so a phrasing the model misses — in
+        # Danish as much as in English — cannot leave the visitor without the form.
+        interview_intent=bool(result.interview_requested)
+        or mentions_interview(payload.message),
         suggest_questions=result.suggest_questions,
         sources=[_citation_out(item) for item in result.sources],
         contact=_contact_out(session),

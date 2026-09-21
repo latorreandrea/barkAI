@@ -53,9 +53,11 @@ FALLBACK_INTERVIEW = (
 )
 
 # Words that strongly suggest the recruiter wants to book an interview. The live
-# model decides this itself; the offline fallback uses these heuristics. Both
-# languages are covered, otherwise a Danish recruiter would never be flagged
-# while Groq is unreachable.
+# model decides this itself; the offline fallback and the API's re-arm signal for
+# the hand-off form use these heuristics. Both languages are covered, otherwise a
+# Danish recruiter would never be flagged while Groq is unreachable — and see
+# ``mentions_interview`` below: the lists are merged, so an English hint (``zoom``)
+# also matches inside a Danish sentence.
 _EN_INTERVIEW_HINTS = (
     "interview",
     "meeting",
@@ -68,6 +70,9 @@ _EN_INTERVIEW_HINTS = (
     "set up",
     "conversation",
     "call",
+    "appointment",
+    "in touch",
+    "reach out",
 )
 _DA_INTERVIEW_HINTS = (
     "samtale",
@@ -80,6 +85,9 @@ _DA_INTERVIEW_HINTS = (
     "opkald",
     "snakke med",
     "tid til",
+    "kontakt",
+    "tale med",
+    "få fat i",
 )
 _INTERVIEW_HINTS = _EN_INTERVIEW_HINTS + _DA_INTERVIEW_HINTS
 
@@ -219,6 +227,18 @@ def _mentions_interview(text: str) -> bool:
     """Offline interview heuristic, reused for salvaged prose answers."""
     lowered = (text or "").lower()
     return any(hint in lowered for hint in _INTERVIEW_HINTS)
+
+
+def mentions_interview(text: str) -> bool:
+    """Public door to the offline heuristic above.
+
+    The API uses it as a *deterministic* backstop for the hand-off form: a
+    request the model failed to flag — in either language — still counts when the
+    message itself says it. It never replaces the model's judgement for the
+    interview record or the notification (a keyword is not evidence enough to
+    email anyone), it only decides whether the form may come back.
+    """
+    return _mentions_interview(text)
 
 
 def generate_reply(

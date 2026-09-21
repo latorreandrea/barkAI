@@ -74,6 +74,7 @@
     var contactEmailEl = document.getElementById("contact-email");
     var contactCompanyEl = document.getElementById("contact-company");
     var contactSaveBtn = document.getElementById("interview-contact-save");
+    var contactCloseEl = document.getElementById("interview-contact-close");
     var contactStatusEl = document.getElementById("interview-contact-status");
     var sourcesLabelEl = document.getElementById("sources-label");
 
@@ -822,10 +823,46 @@
         }
     }
 
+    // The visitor can dismiss the form with its ✕. That choice sticks until they
+    // ask for an interview again in the chat — not on a later reply, not on a
+    // reload — so it is remembered per conversation in localStorage (the key
+    // carries the session id, so a new chat starts from scratch).
+    var CONTACT_DISMISSED_KEY = "barkai_contact_dismissed:" + sessionId;
+
+    function contactFormDismissed() {
+        return window.localStorage.getItem(CONTACT_DISMISSED_KEY) === "1";
+    }
+
+    function rememberContactDismissed(dismissed) {
+        if (dismissed) {
+            window.localStorage.setItem(CONTACT_DISMISSED_KEY, "1");
+        } else {
+            window.localStorage.removeItem(CONTACT_DISMISSED_KEY);
+        }
+    }
+
+    // The ✕: hide the form, clear whatever it was saying, put the focus back on
+    // the composer (a hidden field cannot keep it) and finally remember the
+    // choice — persistence last, so a storage error cannot break the dismissal.
+    function dismissContactForm() {
+        hideContactForm();
+        setContactStatus("", false);
+        if (inputEl) {
+            inputEl.focus();
+        }
+        rememberContactDismissed(true);
+    }
+
+    if (contactCloseEl) {
+        contactCloseEl.addEventListener("click", function () {
+            dismissContactForm();
+        });
+    }
+
     // Reveal the hand-off form for confirmation: whatever the conversation
     // collected is prefilled, so the visitor only has to correct or approve it.
     function revealContactForm() {
-        if (!contactFormEl) {
+        if (!contactFormEl || contactFormDismissed()) {
             return;
         }
         fillContactForm();
@@ -1312,6 +1349,11 @@
             // The agent decided the recruiter is unsure: offer quick questions.
             if (data.suggest_questions) {
                 showIdleSuggestions(null);
+            }
+            if (data.interview_intent) {
+                // They asked again in the chat: the ✕ they clicked earlier no
+                // longer applies (a later reply alone never re-opens the form).
+                rememberContactDismissed(false);
             }
             if (data.interview_requested) {
                 // Hand-off: keep asking for the details if we still have no way

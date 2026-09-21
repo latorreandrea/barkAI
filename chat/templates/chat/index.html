@@ -64,7 +64,8 @@
 
         <!-- ============ MIDDLE: BARKLAI STAGE + LIVE SPEECH BUBBLE ============ -->
         {# Packed to the bottom, not centred: the bubble above the dog grows with  #}
-        {# every reply (one line, then max-h-32, then 14rem with the chips), so    #}
+        {# every reply (one line, then a capped box, then the taller one with the #}
+        {# chips — both caps live in chat.css and are viewport-aware), so        #}
         {# centring the column used to drag the dog up and down with it. Anchored  #}
         {# to the bottom he stays put, the bubble grows upwards instead, and his   #}
         {# feet stop sliding behind the composer.                                  #}
@@ -80,10 +81,13 @@
             {# Comic speech bubble. Shows EXCLUSIVELY BarklAI's current live     #}
             {# message/reply or his progress state (e.g. "BarklAI is searching") #}
             {# with a hard "pop-art" shadow, an ink outline and a tail pointing  #}
-            {# straight down at the dog. Long replies scroll inside (max-h-32).  #}
+            {# straight down at the dog. Long replies scroll inside; the height   #}
+            {# cap lives in chat.css (`.bubble-scroll`, viewport-aware) because   #}
+            {# on a phone the bubble must also leave room for the mascot and the  #}
+            {# composer — including the quick-question nudge below.              #}
             <div id="speech-bubble" class="relative w-full max-w-md">
                 <div id="speech-bubble-scroll"
-                     class="bubble-scroll max-h-32 overflow-y-auto rounded-2xl rounded-br-md
+                     class="bubble-scroll overflow-y-auto rounded-2xl rounded-br-md
                             border-[3px] border-slate-900 bg-white px-5 py-3.5
                             shadow-[5px_5px_0_0_#0f172a]">
                     <p id="speech-bubble-text" class="bubble-text text-[15px] font-semibold leading-snug text-slate-900"></p>
@@ -143,7 +147,11 @@
                     {# pre-rolls with the next clip and reveals only once it can    #}
                     {# draw — swapping the `src` alone blanks the stage, because the #}
                     {# decoder has no frame to show until the new file is ready.    #}
-                    <video class="js-mascot-video block h-auto max-h-[38vh] w-auto max-w-full aspect-[472/720] object-cover object-center"
+                    {# Height cap per viewport: the dog yields room to the bubble on #}
+                    {# a phone (`30svh`, the height with the browser bars showing)   #}
+                    {# and keeps its familiar size from `sm:` up — the two together  #}
+                    {# are what stop the bubble from being clipped on short screens. #}
+                    <video class="js-mascot-video block h-auto max-h-[30svh] w-auto max-w-full aspect-[472/720] object-cover object-center sm:max-h-[38vh]"
                            autoplay muted loop playsinline preload="auto"></video>
                     <video class="js-mascot-video absolute inset-0 h-full w-full opacity-0 object-cover object-center"
                            muted loop playsinline preload="auto" aria-hidden="true"></video>
@@ -163,12 +171,27 @@
             {# flagged an interview request, so Andrea actually receives a way   #}
             {# to reply. It posts the details to /api/chat/contact, which stores #}
             {# them on the InterviewRequest and emails Andrea (no LLM call).     #}
+            {# The ✕ dismisses it; chat.js remembers that per conversation and   #}
+            {# brings the form back only when the visitor asks again (the API's   #}
+            {# per-turn `interview_intent`), never on every later reply.         #}
             <form id="interview-contact" hidden
-                  class="mx-auto mb-2 w-full max-w-xl rounded-2xl border-[3px] border-slate-900
-                         bg-amber-50 px-4 py-3 shadow-[4px_4px_0_0_#0f172a]">
-                <p class="mb-2 text-[12px] font-black uppercase tracking-wider text-slate-900">
+                  class="relative mx-auto mb-2 w-full max-w-xl rounded-2xl border-[3px]
+                         border-slate-900 bg-amber-50 px-4 py-3 shadow-[4px_4px_0_0_#0f172a]">
+                <p class="mb-2 pr-8 text-[12px] font-black uppercase tracking-wider text-slate-900">
                     {% trans "🗓 Interview request — leave your details" %}
                 </p>
+                {# `type="button"` is load-bearing: inside a form a bare <button>     #}
+                {# submits it, which would save the (empty) details on a dismissal. #}
+                <button type="button" id="interview-contact-close"
+                        aria-label="{% trans 'Close the interview form' %}"
+                        title="{% trans 'Close the interview form' %}"
+                        class="absolute right-2.5 top-2.5 flex h-6 w-6 items-center justify-center
+                               rounded-full border-2 border-slate-900 bg-white text-[11px] font-black
+                               leading-none text-slate-900 shadow-[2px_2px_0_0_#0f172a] transition
+                               hover:bg-amber-100 active:translate-x-[1px] active:translate-y-[1px]
+                               active:shadow-none">
+                    <span aria-hidden="true">✕</span>
+                </button>
                 <div class="flex flex-col gap-2 sm:flex-row">
                     <label for="contact-name" class="sr-only">{% trans "Your name" %}</label>
                     <input id="contact-name" name="hr_name" type="text" maxlength="120"

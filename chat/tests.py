@@ -45,6 +45,7 @@ from chat.services import (
     detect_language,
     generate_reply,
     get_knowledge_text,
+    mentions_interview,
 )
 
 
@@ -53,6 +54,51 @@ class IndexViewTests(TestCase):
         response = self.client.get(reverse("chat:index"))
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "chat/index.html")
+
+    def test_mobile_layout_keeps_the_bubble_readable(self):
+        # The phone layout used to clip the quick-question nudge: the bubble grew
+        # upwards out of `main` (which is `overflow: hidden`) and the floating
+        # history toggle landed on top of it. Two decisions came out of that and
+        # this test locks both: the height caps are viewport-aware, and the toggle
+        # stays exactly where the desktop shows it (top-right, floating).
+        response = self.client.get(reverse("chat:index"))
+        body = response.content.decode()
+        self.assertContains(response, 'id="history-toggle"')
+        self.assertContains(response, "absolute right-3 top-3")
+        self.assertContains(response, "max-h-[30svh]")
+        self.assertContains(response, "sm:max-h-[38vh]")
+        # The nudge lives INSIDE the scrollable bubble, between its container and
+        # the mascot video — never beside the bubble where it could be cut off.
+        self.assertLess(
+            body.index('id="speech-bubble-scroll"'), body.index('id="idle-suggestions"')
+        )
+        self.assertLess(
+            body.index('id="idle-suggestions"'), body.index("js-video-shell")
+        )
+
+    def test_chat_css_keeps_the_viewport_aware_caps(self):
+        # The caps live in the page stylesheet, not in the template: a fixed rem
+        # value is what clipped the bubble on short phones (see the test above).
+        css = (settings.BASE_DIR / "static" / "css" / "chat.css").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("max-height: min(8rem, 26svh)", css)
+        self.assertIn("max-height: min(14rem, 32svh)", css)
+        # `safe end` is what makes the surplus scrollable instead of unreachable.
+        self.assertIn("justify-content: safe end", css)
+
+    def test_the_hand_off_form_can_be_dismissed(self):
+        # The ✕ must not submit the form: a bare <button> inside a <form> does,
+        # which would save the (empty) details on a dismissal.
+        response = self.client.get(reverse("chat:index"))
+        body = response.content.decode()
+        self.assertIn('id="interview-contact-close"', body)
+        self.assertIn('type="button"', body)
+        self.assertIn('aria-label="Close the interview form"', body)
+
+    def test_the_dismiss_button_is_translated(self):
+        response = self.client.get(reverse("chat:index"), HTTP_ACCEPT_LANGUAGE="da")
+        self.assertContains(response, "Luk interviewformularen")
 
     def test_static_assets_are_cache_busted(self):
         # WhiteNoise serves these files with a one-year `max-age` and the storage
@@ -863,6 +909,91 @@ class InterviewNotificationTests(TestCase):
         self.assertEqual(session.interview_requests.count(), 1)
         self.assertEqual(session.interview_requests.first().hr_name, "Mette")
         self.assertEqual(len(mail.outbox), 1)
+
+
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+class InterviewIntentTests(TestCase):
+    """When may the hand-off form come back after the visitor dismissed it?
+
+    The API answers with a **per-turn** `interview_intent` (the model's flag for
+    this message, or the message itself asking for an interview in plain words),
+    while `interview_requested` stays the sticky session flag that drives the
+    notification. The keyword backstop is what makes the form reliable in both
+    languages even when the model misses the phrasing.
+    """
+
+    SEND_URL = "/api/chat/send"
+
+    def _send(self, message, **reply):
+        """POST a message with the model stubbed, returning the JSON payload."""
+        payload = {
+            "reply": "Woof! Sure.",
+            "barkley_state": "speaking",
+            "interview_requested": False,
+        }
+        payload.update(reply)
+        with patch(
+            "chat.api.router.generate_reply",
+            return_value=BarkleyResponse(**payload),
+        ):
+            response = self.client.post(
+                self.SEND_URL,
+                data=json.dumps({"session_id": str(uuid4()), "message": message}),
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_the_heuristic_reads_both_languages(self):
+        asked = [
+            "Can we schedule a call with Andrea next week?",
+            "How can I set up an appointment for an interview?",
+            "I would like to get in touch with Andrea about a role.",
+            "Could you reach out to arrange a meeting?",
+            "Kan vi booke et interview med Andrea i næste uge?",
+            "Hvordan kan jeg komme i kontakt med Andrea om et interview?",
+            "Kan vi aftale et møde i næste uge?",
+            "Jeg vil gerne tale med Andrea om en stilling.",
+            "Kan jeg få fat i Andrea for en samtale?",
+            "Har Andrea tid til et kort opkald?",
+        ]
+        for message in asked:
+            self.assertTrue(mentions_interview(message), message)
+
+    def test_the_heuristic_ignores_ordinary_questions(self):
+        quiet = [
+            "Hvilke projekter har Andrea bygget?",
+            "Fortæl mig om hans erfaring med Django.",
+            "Kan du tale om dine projekter?",
+            "Hvad laver BarkAI egentlig?",
+            "Which Google Cloud services has Andrea used?",
+            "Tell me about the RAG pipeline.",
+        ]
+        for message in quiet:
+            self.assertFalse(mentions_interview(message), message)
+
+    def test_a_danish_request_arms_the_form_when_the_model_misses_it(self):
+        # The agent said "no interview" — the message says otherwise, and the
+        # visitor must still get the form (that is the whole point of the backstop).
+        payload = self._send("Hvordan kan jeg komme i kontakt med Andrea om et interview?")
+        self.assertTrue(payload["interview_intent"])
+        # The session flag stays the model's call: nothing was captured.
+        self.assertFalse(payload["interview_requested"])
+
+    def test_an_english_request_arms_the_form_when_the_model_misses_it(self):
+        payload = self._send("How can I set up an appointment for an interview?")
+        self.assertTrue(payload["interview_intent"])
+        self.assertFalse(payload["interview_requested"])
+
+    def test_an_ordinary_message_never_arms_the_form(self):
+        payload = self._send("Fortæl mig om Andreas projekter.")
+        self.assertFalse(payload["interview_intent"])
+
+    def test_the_model_flag_is_enough_on_its_own(self):
+        payload = self._send(
+            "Hello", barkley_state="celebrating", interview_requested=True
+        )
+        self.assertTrue(payload["interview_intent"])
 
 
 @override_settings(

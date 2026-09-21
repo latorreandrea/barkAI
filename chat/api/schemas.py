@@ -75,6 +75,11 @@ class BarkleyOut(Schema):
     reply: str
     barkley_state: str  # e.g. "speaking", "celebrating", "searching", "typing"
     interview_requested: bool
+    # True when *this* turn asked for an interview — the model flagged it or the
+    # message itself said so (see chat.services.mentions_interview). The field
+    # above is the sticky session flag; the UI uses this one to re-open the
+    # hand-off form after the visitor dismissed it with its ✕.
+    interview_intent: bool = False
     # True when the agent thinks the recruiter is unsure what to ask, so the UI
     # can offer the quick-question chips inside the speech bubble.
     suggest_questions: bool = False

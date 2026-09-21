@@ -117,7 +117,11 @@ too — and it hands the stage back 1.2 s after the keys stop (the details are i
 `noteComposerTyping()` in `static/js/chat.js`). `idle` is the resting state and it always comes back:
 after a minute without activity (the same countdown that offers the quick-question chips) and a minute
 after `celebrating` starts — and the **first `searching` of a page load plays to its end** before the
-answer is spoken (see [the mascot notes](static/mascot/README.md)). The clips
+answer is spoken (see [the mascot notes](static/mascot/README.md)). On a phone the bubble's height is
+capped against the viewport (`min(8rem, 26svh)`, and `min(14rem, 32svh)` once the quick-question chips
+are showing) while the mascot yields room (`max-h-[30svh]` below `sm:`) and the stage falls back to
+`justify-content: safe end` — so the nudge line can never be pushed out of `main` (which is
+`overflow: hidden`) and left unreachable. The clips
 blend straight into the white page (no border, no circle) and are H.264 + yuv420p at 24 fps. They are
 the **vertical take at 472x720** (the shape the player crops to with `object-cover` inside a `472:720`
 box), re-encoded from 1280x720 exports that pillarboxed it in black — geometry, numbers and the export
@@ -176,7 +180,7 @@ Danish question retrieve English project READMEs.
 8. **BarklAI reaction clips** — `idle`, `sniffing`, `searching`, `typing`, `speaking` and `celebrating` MP4s under `static/mascot/` drive the mascot animation: the vertical 472x720 take, cropped in a `472:720` box (`object-cover`), swapped on a two-element stage so the hand-over never blanks or blinks, with an emoji fallback when a clip is missing. `typing` is the visitor's own state — it reacts to the message being written in the composer — and `idle` is the resting clip, restored after a minute of inactivity and a minute after `celebrating`, with the first `searching` of a visit played in full — see [the mascot notes](#how-the-animations-were-made).
 9. **Custom error pages** — project-level `403`, `404` and `500` templates.
 10. **Environment-driven settings** — values read from the environment only (python-dotenv is intentionally not used); blank values fall back to safe defaults, and `DEBUG` defaults to `True` for a frictionless local start.
-11. **Automated tests** — index view, chat REST API, the agent service (Groq mocked, no network), the knowledge sync + indexing commands, the i18n switching, the interview hand-off + notifications, the guardrails, the citation plumbing, the golden-set evaluator, the scheduled-jobs chain and the GDPR surface (**136 tests**; the pgvector round-trip runs only on PostgreSQL).
+11. **Automated tests** — index view, chat REST API, the agent service (Groq mocked, no network), the knowledge sync + indexing commands, the i18n switching, the interview hand-off + notifications, the guardrails, the citation plumbing, the golden-set evaluator, the scheduled-jobs chain and the GDPR surface (**146 tests**; the pgvector round-trip runs only on PostgreSQL).
 12. **Retrieval-augmented answers (RAG)** — the knowledge base is chunked and embedded (`KnowledgeChunk` + **pgvector**). With `RAG_ENABLED=True` only the most relevant chunks (native `<=>` cosine distance on PostgreSQL) are sent to the model; the curated **career profile is always injected verbatim** and kept out of the similarity search (see below), so it cannot crowd the project chunks out of the prompt. Without RAG the whole corpus is stuffed into the prompt as a fallback.
 13. **Bilingual UI and agent (EN/DA)** — Django i18n (`{% trans %}` + `JavaScriptCatalog`) with `Accept-Language` detection and a navbar toggle; the agent answers in the recruiter's language, enforced by a detect-and-retry **language guard** (see [Language parity](#language-parity-en-and-da)).
 14. **GDPR-ready** — a plain-language privacy notice (EN/DA), one-click **erasure** of the conversation (`POST /session/delete/`), a retention job (`purge_old_sessions`) and the full processing register inline in [Privacy & GDPR](#privacy--gdpr).
@@ -304,6 +308,12 @@ contact form revealed ───▶ POST /api/chat/contact   (no LLM call, so it 
   confirms or corrects instead of retyping (`Confirm my details` instead of `Save my details`, both
   translated) — it never overwrites a field they have edited, and it steps out of the way while BarklAI
   answers so a pending hand-off cannot cover his reply.
+* **Dismissible form** — the ✕ on the card closes it, and the choice is remembered *per conversation*
+  in `localStorage`. The form comes back only when the visitor asks again in the chat: the API answers
+  with a **per-turn** `interview_intent` (`interview_requested` for *this* message — the model's flag or
+  the message itself asking for an interview, `chat.services.mentions_interview`, which understands both
+  languages). A later reply never re-opens what the recruiter just closed, and the ✕ is
+  `type="button"`, so dismissing it can never submit the (empty) form.
 * **Notification** (`chat/notifications.py`) — `send_mail` to `INTERVIEW_NOTIFY_EMAIL` with the
   recruiter's details, the triggering message and an admin deep link; the outcome is stamped on the
   row. It is idempotent, never raises into the request cycle, and
@@ -368,8 +378,8 @@ GROQ_MODEL (preview)  ──fails──▶  GROQ_MODEL_FALLBACK (production: lla
 
 ### Evaluation suite (golden set)
 
-`chat/evals/golden_set.json` is a curated, versioned set of **21 recruiter questions (11 English,
-10 Danish)** carrying the facts each answer must contain, the claims it must never make, the expected
+`chat/evals/golden_set.json` is a curated, versioned set of **23 recruiter questions (12 English,
+11 Danish)** carrying the facts each answer must contain, the claims it must never make, the expected
 language, the expected interview flag and the citations the reply has to carry.
 
 ```bash
@@ -549,7 +559,7 @@ the runtime `PATH` — the bare command does not exist in the container (see
 
 | Job | What it does |
 | --- | --- |
-| `test` | installs requirements, compiles the `.mo` catalogues, validates the golden set offline (`eval_agent --check-only`), runs the **136 tests** on SQLite, then `check --deploy` with `DEBUG=False` and a dummy `DATABASE_URL` |
+| `test` | installs requirements, compiles the `.mo` catalogues, validates the golden set offline (`eval_agent --check-only`), runs the **146 tests** on SQLite, then `check --deploy` with `DEBUG=False` and a dummy `DATABASE_URL` |
 | `static` | `npm ci` + `npm run css:build` + `git diff --exit-code static/css/barkai.css`, so a new Tailwind class can never be missing from the committed stylesheet |
 
 > The live evaluation (`eval_agent`) is **not** in CI on purpose: it costs real Groq calls and takes ~10 minutes.
@@ -581,7 +591,7 @@ The repository is a Django project with a thin surface: `barkai/` holds the sett
 2. On load the UI calls `GET /api/chat/history/{session_id}` and renders the persisted conversation (the session is created on first contact).
 3. Sending a message issues a CSRF-protected `POST /api/chat/send`. Drafts stay in the browser: the mascot switches to the `typing` clip while the message is written (a local state — the server never sees a draft, and the API contract is unchanged).
 4. With **RAG enabled** the message is embedded (`chat/embeddings.py`) and the closest chunks are fetched from `KnowledgeChunk` (`chat/rag.py`); otherwise the whole `KnowledgeDocument` corpus is used. Either way the router persists the user turn, rebuilds the conversation history and delegates the reply to `chat.services.generate_reply()`, which asks **Groq** (JSON mode) for a structured answer.
-5. The API responds with `{reply, barkley_state, interview_requested, suggest_questions}`; the UI switches BarklAI's reaction clip (`searching` while working, `speaking` for the answer, `celebrating` for interview requests) and, when `suggest_questions` is true, offers the quick-question chips inside the bubble.
+5. The API responds with `{reply, barkley_state, interview_requested, interview_intent, suggest_questions}`; `barkley_state` drives the mascot clip (`searching` while working, `speaking` for the answer, `celebrating` for interview requests), `interview_intent` tells the UI this turn asked for an interview (so the hand-off form may come back if it was dismissed) and `suggest_questions` offers the quick-question chips inside the bubble.
 6. The active language comes from `Accept-Language` (or the navbar toggle), so both the UI copy and the agent's answer follow the recruiter's language — and the reply is guarded against language drift (see [Language parity](#language-parity-en-and-da)).
 7. When an interview is requested, the session gets an `InterviewRequest` event and the contact form is revealed; submitting it calls `POST /api/chat/contact`, which stores the details and emails Andrea (see [Interview hand-off](#interview-hand-off)).
 
@@ -746,7 +756,7 @@ Response: `{session_id, interview_requested, messages: [{id, sender, content, so
 
 Persists the recruiter turn, generates BarklAI's reply and persists it too.
 Request body: `{session_id, message, hr_name?, hr_email?, company_name?}`.
-Response: `{session_id, reply, barkley_state, interview_requested, suggest_questions, sources, contact}` — `barkley_state` drives the mascot clip (e.g. `speaking`, `celebrating`, `searching`) and `suggest_questions` tells the UI to offer the quick-question chips. `sources` are the citations the reply is grounded in: the model returns passage **numbers**, the server resolves them into `{label, title, url, lines}` objects whose `url` + `lines` open the cited file at the cited lines on GitHub (see [Cited sources](#cited-sources)), and they are persisted with the assistant message. `contact` echoes back the details the conversation knows (see [Interview hand-off](#interview-hand-off)), including an address the recruiter typed in the message itself. Validation: `message` is capped at 2000 characters (`422` when exceeded) and the endpoint is rate-limited (`429`) per session and per IP. When `interview_requested` is true the session also gets an `InterviewRequest` row, and the notification goes out immediately if the payload — or the message — already carried an email.
+Response: `{session_id, reply, barkley_state, interview_requested, interview_intent, suggest_questions, sources, contact}` — `barkley_state` drives the mascot clip (e.g. `speaking`, `celebrating`, `searching`) and `suggest_questions` tells the UI to offer the quick-question chips. `sources` are the citations the reply is grounded in: the model returns passage **numbers**, the server resolves them into `{label, title, url, lines}` objects whose `url` + `lines` open the cited file at the cited lines on GitHub (see [Cited sources](#cited-sources)), and they are persisted with the assistant message. `contact` echoes back the details the conversation knows (see [Interview hand-off](#interview-hand-off)), including an address the recruiter typed in the message itself. Validation: `message` is capped at 2000 characters (`422` when exceeded) and the endpoint is rate-limited (`429`) per session and per IP. When `interview_requested` is true the session also gets an `InterviewRequest` row, and the notification goes out immediately if the payload — or the message — already carried an email.
 
 ### POST /api/chat/contact
 
@@ -980,13 +990,13 @@ npm run css:build                   # rebuild static/css/barkai.css after templa
 python manage.py test
 ```
 
-The suite (`chat/tests.py`, **136 tests**) covers: the index view; the history endpoint; `send` persisting both turns; the interview flag; the agent service with the **Groq client mocked** (JSON parsing, friendly fallbacks, the bilingual offline heuristics, the **language guard** — retry once, keep the first answer if the retry also fails, skip the retry when the languages match, honour `AGENT_LANGUAGE_GUARD=False` — and the **JSON-mode salvage** of a refused prose answer); `detect_language()` itself; the citation plumbing (passage numbers resolved to `{label, title, url, lines}`, an invented number or label dropped, duplicates collapsed, the legacy label form still accepted, the API returning and persisting the objects, legacy strings still serializing, user turns carrying none, and the prose sanitiser's EN/DA test table with the sentences it must leave alone); the chunker's line spans (paragraph and hard-split cases, the stored `start_line`/`end_line`, a moved chunk refreshed without re-embedding, the section title a citation shows); the golden-set evaluator (file shape, both languages, PASS/FAIL reasons, the always-on prose contract, the `cites_any` / `cites_something` expectations); retrieval (profile always injected, profile never searched, per-source diversity cap, the metadata a citation needs); the interview hand-off (capture rules including the corrected-email case, the `/api/chat/contact` endpoint, the notification email in a locmem outbox, "never notified twice", details stored even with notifications disabled, cascade on erasure, the address extraction from a message and the `contact` echo the form prefills from); the guardrails (2000-character cap → `422`, throttle → `429`, `0` disables it); the knowledge commands (`sync_knowledge` incl. the `GITHUB_EXCLUDE_REPOS` filter and `--prune`, `build_index` chunking + hash idempotency, `knowledge_status` coverage/staleness/exit codes, `purge_old_sessions`, the **recovery command** `retry_interview_notifications` — which requests count
+The suite (`chat/tests.py`, **146 tests**) covers: the index view; the history endpoint; `send` persisting both turns; the interview flag; the agent service with the **Groq client mocked** (JSON parsing, friendly fallbacks, the bilingual offline heuristics, the **language guard** — retry once, keep the first answer if the retry also fails, skip the retry when the languages match, honour `AGENT_LANGUAGE_GUARD=False` — and the **JSON-mode salvage** of a refused prose answer); `detect_language()` itself; the citation plumbing (passage numbers resolved to `{label, title, url, lines}`, an invented number or label dropped, duplicates collapsed, the legacy label form still accepted, the API returning and persisting the objects, legacy strings still serializing, user turns carrying none, and the prose sanitiser's EN/DA test table with the sentences it must leave alone); the chunker's line spans (paragraph and hard-split cases, the stored `start_line`/`end_line`, a moved chunk refreshed without re-embedding, the section title a citation shows); the golden-set evaluator (file shape, both languages, PASS/FAIL reasons, the always-on prose contract, the `cites_any` / `cites_something` expectations); retrieval (profile always injected, profile never searched, per-source diversity cap, the metadata a citation needs); the interview hand-off (capture rules including the corrected-email case, the `/api/chat/contact` endpoint, the notification email in a locmem outbox, "never notified twice", details stored even with notifications disabled, cascade on erasure, the address extraction from a message and the `contact` echo the form prefills from, the **dismissible form**: its ✕ markup (and the Danish label), the per-turn `interview_intent` the API sends, and the bilingual keyword backstop that arms the form even when the model misses the phrasing); the guardrails (2000-character cap → `422`, throttle → `429`, `0` disables it); the knowledge commands (`sync_knowledge` incl. the `GITHUB_EXCLUDE_REPOS` filter and `--prune`, `build_index` chunking + hash idempotency, `knowledge_status` coverage/staleness/exit codes, `purge_old_sessions`, the **recovery command** `retry_interview_notifications` — which requests count
 as pending, a send that stamps `notified_at`, the ones already notified or captured without an address,
 `--dry-run`, disabled notifications and an SMTP failure reported with its own reason — and the SMTP
 self-check `send_test_email`, which reports the backend it will use, falls back to
 `INTERVIEW_NOTIFY_EMAIL` when `--to` is missing and fails cleanly when there is no recipient at all); the i18n switching (browser detection, session toggle, JS catalogue); the scheduled-jobs chain (step order, failure aggregation, the `SystemExit` case, warning markers, `--no-prune`, `--dry-run`); the GDPR surface (privacy notice, erasure endpoint, the footer button rendered once and on every page, its Danish copy); and the `403`/`404`/`500` pages.
 
-The citation chips and the mascot state machine are DOM code, so they are verified against the real `static/js/chat.js` outside the Django suite: a throwaway Node harness (no jsdom) loads the file with a minimal fake DOM, fake `<video>` elements and a **virtual clock**, then drives the real code path and asserts 20 behaviours — the citation chips (link, target/rel, text, tooltip, the legacy string shape, no sources line when nothing was cited), the resting clip coming back after a minute of inactivity and a minute after `celebrating`, `typing` taking the stage (and the resting clip returning, never the last reaction) and the first `searching` of a visit playing its whole clip before the answer is typed, while a later search is cut as soon as the reply is ready.
+The citation chips and the mascot state machine are DOM code, so they are verified against the real `static/js/chat.js` outside the Django suite: a throwaway Node harness (no jsdom) loads the file with a minimal fake DOM, fake `<video>` elements and a **virtual clock**, then drives the real code path and asserts 27 behaviours — the citation chips (link, target/rel, text, tooltip, the legacy string shape, no sources line when nothing was cited), the resting clip coming back after a minute of inactivity and a minute after `celebrating`, `typing` taking the stage (and the resting clip returning, never the last reaction), the first `searching` of a visit playing its whole clip before the answer is typed, and the hand-off form's ✕ (it closes the form, a later reply does not re-open it, and asking for an interview again does).
 
 ### Evaluation (live, on demand)
 
@@ -1213,7 +1223,7 @@ Developer* at job level) rather than a project-wide role.
 Before a release, the two gates are the test suite and the live evaluation:
 
 ```bash
-python manage.py test                 # 136 tests, offline
+python manage.py test                 # 146 tests, offline
 python manage.py eval_agent           # live score, non-zero exit on failure
 ```
 
@@ -1300,6 +1310,9 @@ No tracking or advertising cookies. The browser stores only:
 
 * `barkai.session_id` — the conversation identifier (strictly necessary);
 * `barkai_visited` — remembers that the introduction was already shown;
+* `barkai_contact_dismissed:<session id>` — remembers that the recruiter closed the interview hand-off
+  form, so it is not shown again in that conversation unless they ask for an interview again (a
+  preference, not strictly necessary — clear it and the form simply reappears);
 * Django's session cookie, used only to remember the chosen language (EN/DA).
 
 Because these are strictly necessary, no cookie banner is required; they must still be described in the notice (they are).

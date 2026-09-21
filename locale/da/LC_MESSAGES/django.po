@@ -233,6 +233,9 @@ msgstr "Gem mine oplysninger"
 msgid "Confirm my details"
 msgstr "Bekræft mine oplysninger"
 
+msgid "Close the interview form"
+msgstr "Luk interviewformularen"
+
 msgid "🐾 Thanks! Your details are on their way to Andrea."
 msgstr "🐾 Tak! Dine oplysninger er på vej til Andrea."
 

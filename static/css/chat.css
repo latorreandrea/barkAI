@@ -160,8 +160,31 @@
 #speech-bubble-text { white-space: pre-wrap; overflow-wrap: break-word; }
 #speech-bubble-text.is-idle { color: #64748b; font-weight: 500; }
 
-/* Slim comic scrollbar inside the max-h-52 bubble. */
-.bubble-scroll { scrollbar-width: thin; scrollbar-color: rgba(15, 23, 42, .35) transparent; }
+/* The stage packs its content to the bottom (the bubble grows upwards and the
+ * mascot must not slide around as it does). `safe end` is what keeps that
+ * behaviour honest when the content does not fit: a plain `flex-end` pushes the
+ * overflow *above* the box, where nothing can ever scroll to it — which is how
+ * the "Ask BarklAI your next question" nudge used to get cut off on short
+ * phones. With `safe end` the surplus goes downwards instead, the stage scrolls
+ * only when it has to, and a swipe brings back whatever is off-screen rather
+ * than losing it (the page itself never scrolls: `body` is `overflow-hidden`). */
+#mascot-stage {
+    justify-content: safe end;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+}
+
+/* The bubble grows in stages (one line, then this box, then the taller box with
+ * the quick-question chips) and its caps are viewport-aware on purpose: on a
+ * phone the bubble, the mascot and the composer have to fit between the navbar
+ * and the footer. `svh` is the height *with* the mobile browser bars showing,
+ * i.e. the space a phone really gives us; on a tall viewport the rem value wins,
+ * so the desktop bubble keeps exactly the size it always had. */
+.bubble-scroll {
+    max-height: min(8rem, 26svh);
+    scrollbar-width: thin;
+    scrollbar-color: rgba(15, 23, 42, .35) transparent;
+}
 .bubble-scroll::-webkit-scrollbar { width: 6px; }
 .bubble-scroll::-webkit-scrollbar-track { background: transparent; }
 .bubble-scroll::-webkit-scrollbar-thumb { background: rgba(15, 23, 42, .28); border-radius: 999px; }
@@ -215,7 +238,7 @@
 /* after a spell of inactivity. The bubble grows to fit the chips, and */
 /* the live message is hidden while they are showing.                  */
 /* ------------------------------------------------------------------ */
-#speech-bubble-scroll.is-suggesting { max-height: 14rem; }
+#speech-bubble-scroll.is-suggesting { max-height: min(14rem, 32svh); }
 /* Idle-nudge mode replaces the live text with the hint line; when the chips
    accompany a real reply (is-suggesting only) the text stays visible above. */
 #speech-bubble-scroll.is-hinting #speech-bubble-text { display: none; }
