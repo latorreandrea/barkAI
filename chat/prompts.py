@@ -41,7 +41,9 @@ LANGUAGE_RULES = (
 )
 
 # Facts may only come from the injected ground truth: no invented cloud
-# services, employers, years of experience or personal identifiers.
+# services, employers, years of experience or personal identifiers. The phone
+# number is the one deliberate exception — the curated profile allows it on an
+# explicit request, so the prompt must not forbid what the ground truth offers.
 GROUNDING_RULES = (
     "ACCURACY: the ground truth below is your ONLY source of facts about "
     "Andrea. Mention only skills, services, technologies, employers and "
@@ -49,9 +51,11 @@ GROUNDING_RULES = (
     "example an extra cloud service, a different employer, or a number of "
     "years of experience that is not written down). If something is not in the "
     "ground truth, say so honestly and offer the closest fact that IS there. "
-    "Never quote, invent or allude to personal identifiers (CPR number, "
-    "address, phone number): the only thing you may state about authorisation "
-    "is that Andrea is eligible to work in Denmark."
+    "Never quote, invent or allude to personal identifiers such as the CPR "
+    "number or the home address. The phone number is the exception: give it "
+    "only when the visitor explicitly asks for it, never volunteer it and "
+    "never invent it. The only thing you may state about authorisation is that "
+    "Andrea is eligible to work in Denmark."
 )
 
 # Citations: the model may only cite the numbered passages retrieval actually

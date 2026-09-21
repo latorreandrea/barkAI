@@ -257,7 +257,9 @@ block:
 
 * mention only skills, services, employers and numbers that appear in the ground truth;
 * never add a plausible-sounding extra — say what is missing and offer the closest fact that *is* there;
-* never quote or allude to personal identifiers.
+* never quote or allude to personal identifiers (CPR number, home address) — the phone number is the
+  deliberate exception: it comes from the profile and is shared only when the visitor asks for it
+  explicitly.
 
 The rules were added after a *misdiagnosis* worth recording: I first flagged the agent for naming
 **Firestore, Cloud Build and Secret Manager**, having grepped only the local files — but those services
