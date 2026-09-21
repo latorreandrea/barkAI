@@ -388,3 +388,9 @@ GITHUB_TOKEN = env_str("GITHUB_TOKEN", "")
 GITHUB_INCLUDE_FORKS = env_bool("GITHUB_INCLUDE_FORKS", default="False")
 GITHUB_API_TIMEOUT_SECONDS = env_float("GITHUB_API_TIMEOUT_SECONDS", 15.0)
 GITHUB_README_MAX_CHARS = env_int("GITHUB_README_MAX_CHARS", 14000)
+
+# Public URL of the curated career profile (``chat/knowledge/andrea_profile.md``),
+# e.g. its GitHub blob URL. Optional: when set, a citation that points at the
+# profile is clickable too; the README citations use the GitHub URL the sync
+# already stores, which always points at the file on the default branch.
+PROFILE_URL = env_str("PROFILE_URL", "")

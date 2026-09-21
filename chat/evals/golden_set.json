@@ -10,7 +10,12 @@
     "Kubernetes').",
     "The persona is deliberately creative and the model runs at temperature 0.5, so a case",
     "can flake on wording: prefer property assertions (stays on topic, never makes a claim)",
-    "over exact phrases."
+    "over exact phrases.",
+    "Every case also asserts the prose contract: the reply must be sentences, with no",
+    "bullet points, no 'Sources: ...' line and no bracketed list of labels or passage",
+    "numbers (the citations travel in the sources array and the UI renders them).",
+    "'cites_something' asserts the reply carried at least one citation; 'cites_any'",
+    "asserts one of the listed labels was cited."
   ],
   "cases": [
     {
@@ -19,6 +24,16 @@
       "question": "What is BarkAI and what does BarklAI do?",
       "must_contain_any": ["rag", "retrieval", "knowledge base"],
       "must_not_contain": [],
+      "cites_something": true,
+      "interview_requested": false
+    },
+    {
+      "id": "en-cloud-run-deployment",
+      "language": "en",
+      "question": "How did you deploy on Cloud Run?",
+      "must_contain_any": ["cloud run", "container", "docker"],
+      "must_not_contain": [],
+      "cites_something": true,
       "interview_requested": false
     },
     {
@@ -144,6 +159,16 @@
       "must_contain": ["django"],
       "must_contain_any": ["postgresql", "postgres"],
       "must_not_contain": ["cpr"],
+      "cites_something": true,
+      "interview_requested": false
+    },
+    {
+      "id": "da-cloud-run-udrulning",
+      "language": "da",
+      "question": "Hvordan har du udrullet på Cloud Run?",
+      "must_contain_any": ["cloud run", "container", "docker"],
+      "must_not_contain": [],
+      "cites_something": true,
       "interview_requested": false
     },
     {

@@ -135,6 +135,11 @@ class KnowledgeChunk(models.Model):
     content = models.TextField("Content")
     token_count = models.PositiveIntegerField("Tokens", default=0)
     content_hash = models.CharField("Content hash", max_length=64, db_index=True)
+    # 1-based line span of this chunk inside its document, so a citation can point
+    # at the passage itself (`…/README.md#L120-L148`). 0 means "unknown" — rows
+    # indexed before this was tracked — and the citation then links the file only.
+    start_line = models.PositiveIntegerField("First line", default=0)
+    end_line = models.PositiveIntegerField("Last line", default=0)
     embedding = VectorField("Embedding", dimensions=1024, null=True)
     indexed_at = models.DateTimeField("Indexed at", auto_now=True)
 

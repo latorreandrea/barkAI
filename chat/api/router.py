@@ -15,6 +15,7 @@ from ninja.errors import HttpError
 
 from chat.api.schemas import (
     BarkleyOut,
+    CitationOut,
     ContactIn,
     ContactInfo,
     ContactOut,
@@ -35,13 +36,29 @@ from chat.throttle import too_many_requests
 router = Router(tags=["chat"])
 
 
+def _citation_out(item) -> CitationOut:
+    """One stored citation as a response object, tolerating the legacy shape.
+
+    Citations written before they carried links were bare label strings; they
+    still serialize, just without a URL, which keeps old conversations working.
+    """
+    if isinstance(item, dict):
+        return CitationOut(
+            label=str(item.get("label") or ""),
+            title=str(item.get("title") or ""),
+            url=str(item.get("url") or ""),
+            lines=str(item.get("lines") or ""),
+        )
+    return CitationOut(label=str(item or ""))
+
+
 def _serialize_message(message: ChatMessage) -> MessageOut:
     """Map an ORM ChatMessage onto its response schema."""
     return MessageOut(
         id=message.id,
         sender=message.sender,
         content=message.content,
-        sources=message.sources or [],
+        sources=[_citation_out(item) for item in (message.sources or [])],
         created_at=message.created_at,
     )
 
@@ -175,7 +192,7 @@ def send_message(request, payload: SendIn) -> BarkleyOut:
         barkley_state=result.barkley_state,
         interview_requested=session.interview_requested,
         suggest_questions=result.suggest_questions,
-        sources=list(result.sources),
+        sources=[_citation_out(item) for item in result.sources],
         contact=_contact_out(session),
     )
 

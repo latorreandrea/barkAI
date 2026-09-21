@@ -135,15 +135,65 @@ class BarkleyResponse:
     barkley_state: str  # One of: "speaking", "celebrating", "searching", "typing".
     interview_requested: bool
     suggest_questions: bool = False
-    # Knowledge-base labels the answer is grounded in, already validated against
-    # the chunks retrieval returned (see _sanitize_sources).
-    sources: tuple[str, ...] = ()
+    # Citations of the numbered passages retrieval returned, already resolved to
+    # ``{label, title, url, lines}`` dicts (see _resolve_citations): the model only
+    # ever proposes passage numbers, so a fabricated label — or an invented URL —
+    # can never appear here.
+    sources: tuple[dict[str, str], ...] = ()
 
 
 # The model occasionally answers in prose instead of JSON, which Groq rejects
 # with 400 json_validate_failed. Throwing that text away would lose a perfectly
 # good answer, so the refusal is salvaged (see _salvage_failed_generation).
-_SOURCES_LINE_RE = re.compile(r"^[ \t]*sources?[ \t]*:.*$", re.IGNORECASE | re.MULTILINE)
+#
+# JSON mode guarantees an object, not a clean `reply`: in practice the model
+# sometimes appends its citation list to the prose ("Sources: ['a', 'b']", or a
+# bare list/bullet run). Those lines are citation material by definition, so they
+# are dropped — but a bullet or a bracketed line is only dropped when every item
+# it carries is a number or a label retrieval actually returned. A real sentence
+# that happens to start with a dash is left alone.
+_SOURCES_LINE_RE = re.compile(
+    r"^\s*(?:sources?|kilder?|kilde|references?|referencer|fonti|quellen)\s*[:\-–—].*$",
+    re.IGNORECASE,
+)
+_BULLET_RE = re.compile(r"^\s*[-*•·]\s+(.+)$")
+# A quoted, comma-separated list: a Python/JSON list is never prose.
+_QUOTED_ITEM_RE = re.compile(r"^['\"`].+['\"`]$")
+
+
+def _looks_like_citation_list(line: str, labels: set[str]) -> bool:
+    """True when a line carries nothing but citation material (never prose)."""
+    text = (line or "").strip().rstrip(".").strip()
+    if not text:
+        return False
+    bullet = _BULLET_RE.match(text)
+    payload = bullet.group(1) if bullet else text.strip("[](){} \t")
+    items = [item for item in re.split(r"[,;|]", payload) if item.strip()]
+    if not items or len(items) > 8:
+        return False
+    cleaned = [item.strip().strip("'\"`").strip() for item in items]
+    if all(item.isdigit() for item in cleaned):
+        return True  # a passage list: [1, 3]
+    if labels and all(item.lower() in labels for item in cleaned):
+        return True  # ['owner/repo', 'owner/repo']
+    if len(items) > 1 and all(_QUOTED_ITEM_RE.match(item.strip()) for item in items):
+        return True  # a quoted list of strings, whatever the labels were
+    return False
+
+
+def _strip_sources_lines(text: str, known_labels: set[str] | None = None) -> str:
+    """Drop the citation list the model sometimes appends to the prose.
+
+    ``known_labels`` are the labels of the citable passages, which is what makes
+    the bullet/list branch safe to apply.
+    """
+    labels = {str(label).lower() for label in (known_labels or set())}
+    kept = [
+        line
+        for line in (text or "").splitlines()
+        if not _SOURCES_LINE_RE.match(line) and not _looks_like_citation_list(line, labels)
+    ]
+    return "\n".join(kept).strip()
 
 
 def _salvage_failed_generation(exc: Exception) -> str:
@@ -163,11 +213,6 @@ def _salvage_failed_generation(exc: Exception) -> str:
     if not isinstance(error, dict) or error.get("code") != "json_validate_failed":
         return ""
     return str(error.get("failed_generation") or "").strip()
-
-
-def _strip_sources_lines(text: str) -> str:
-    """Drop the ``sources: [...]`` line the model sometimes adds to the prose."""
-    return _SOURCES_LINE_RE.sub("", text).strip()
 
 
 def _mentions_interview(text: str) -> bool:
@@ -194,8 +239,8 @@ def generate_reply(
     ui_language = language or get_language() or "en"
     # The language the recruiter actually wrote in; ``None`` when undecidable.
     expected_language = detect_language(user_message)
-    knowledge, allowed_sources = _knowledge_for_prompt(user_message)
-    system_prompt = build_system_prompt(knowledge, ui_language, allowed_sources)
+    knowledge, passages = _knowledge_for_prompt(user_message)
+    system_prompt = build_system_prompt(knowledge, ui_language, passages)
 
     # Primary model first, then the configured production fallback, so a
     # decommissioned preview model cannot take the whole chat down.
@@ -212,7 +257,7 @@ def generate_reply(
                 history or [],
                 api_key,
                 system_prompt,
-                allowed_sources,
+                passages,
                 expected_language,
                 model,
             )
@@ -222,7 +267,8 @@ def generate_reply(
                 # The model answered in prose instead of JSON: Groq refused it,
                 # but the answer itself is good (citations stay unknown).
                 logger.warning("Groq rejected the JSON; keeping the prose answer.")
-                reply = _strip_sources_lines(salvaged) or salvaged
+                labels = {str(passage.get("label") or "") for passage in passages}
+                reply = _strip_sources_lines(salvaged, labels) or salvaged
                 interview = _mentions_interview(reply)
                 return BarkleyResponse(
                     reply=reply,
@@ -257,14 +303,14 @@ def _reply_from_model(
     history: list[dict],
     api_key: str,
     system_prompt: str,
-    allowed_sources: list[str],
+    passages: list[dict],
     expected_language: str | None,
     model: str,
 ) -> BarkleyResponse:
     """One model attempt, including the single language-guard retry."""
     result = _parse_reply(
         _call_groq(user_message, history, api_key, system_prompt, model),
-        allowed_sources,
+        passages,
     )
     if _should_retry_for_language(expected_language, result.reply):
         logger.info(
@@ -279,7 +325,7 @@ def _reply_from_model(
                 _correction_prompt(system_prompt, expected_language),
                 model,
             ),
-            allowed_sources,
+            passages,
         )
         if not _should_retry_for_language(expected_language, retry.reply):
             return retry
@@ -317,20 +363,21 @@ def get_knowledge_text() -> str:
     return "\n\n".join(chunks)[:max_chars]
 
 
-def _knowledge_for_prompt(user_message: str) -> tuple[str, list[str]]:
-    """Knowledge text for the system prompt plus the citable source labels.
+def _knowledge_for_prompt(user_message: str) -> tuple[str, list[dict]]:
+    """Knowledge text for the system prompt plus the citable passages.
 
     With RAG enabled (``RAG_ENABLED=True``) only the chunks that match the
-    question are sent; otherwise the whole knowledge base is stuffed in, as a
-    safe fallback for a small corpus — in that case there are no citation labels
-    because no per-chunk retrieval happened.
+    question are sent, numbered so the model can cite them by number (see
+    ``chat.rag.build_retrieved_context_with_citations``); otherwise the whole
+    knowledge base is stuffed in, as a safe fallback for a small corpus — in that
+    case there is nothing to cite, because no per-passage retrieval happened.
     """
     if getattr(settings, "RAG_ENABLED", False):
-        from chat.rag import build_retrieved_context_with_sources
+        from chat.rag import build_retrieved_context_with_citations
 
-        context, sources = build_retrieved_context_with_sources(user_message)
+        context, passages = build_retrieved_context_with_citations(user_message)
         if context:
-            return context, sources
+            return context, passages
     return get_knowledge_text(), []
 
 
@@ -365,41 +412,76 @@ def _call_groq(
 
 
 def _parse_reply(
-    raw: str, allowed_sources: list[str] | None = None
+    raw: str, passages: list[dict] | None = None
 ) -> BarkleyResponse:
     """Turn the model's JSON (tolerantly parsed) into a ``BarkleyResponse``.
 
-    ``allowed_sources`` are the labels retrieval actually returned; any other
-    label the model invents is dropped by :func:`_sanitize_sources`.
+    ``passages`` are the numbered passages retrieval returned. Their labels feed
+    the prose sanitiser (so a citation list the model wrote into ``reply`` never
+    reaches the recruiter) and their numbers are the only citations allowed
+    through, see :func:`_resolve_citations`.
     """
     data = _loads_json_object(raw)
-    reply = str(data.get("reply") or "").strip() or FALLBACK_UNREACHABLE
+    passages = passages or []
+    labels = {str(passage.get("label") or "") for passage in passages}
+    reply = _strip_sources_lines(str(data.get("reply") or "").strip(), labels).strip()
     interview = bool(data.get("interview_requested"))
     return BarkleyResponse(
-        reply=reply,
+        reply=reply or FALLBACK_UNREACHABLE,
         barkley_state="celebrating" if interview else "speaking",
         interview_requested=interview,
         suggest_questions=bool(data.get("suggest_questions")),
-        sources=_sanitize_sources(data.get("sources"), allowed_sources or []),
+        sources=_resolve_citations(data.get("sources"), passages),
     )
 
 
-def _sanitize_sources(raw, allowed: list[str]) -> tuple[str, ...]:
-    """Keep only the labels that were actually retrieved, in a stable order.
+def _resolve_citations(raw, passages: list[dict]) -> tuple[dict, ...]:
+    """Map what the model cited onto the passages retrieval actually returned.
 
     The same idea as the language guard: the model proposes, the server decides.
-    A cited source that retrieval never returned is dropped rather than shown to
-    a recruiter as evidence.
+    Passage numbers are the documented form and the legacy label form is still
+    accepted (the prompt used to ask for labels, and a stubbed or cached answer
+    may still use it); anything else — an invented number, a label that was never
+    retrieved — is dropped rather than shown to a recruiter as evidence.
     """
-    if not isinstance(raw, list) or not allowed:
+    if not isinstance(raw, list) or not passages:
         return ()
-    by_label = {label.lower(): label for label in allowed}
-    kept: list[str] = []
+    by_id = {int(passage["id"]): passage for passage in passages}
+    by_label = {str(passage["label"]).lower(): passage for passage in passages}
+    kept: list[dict] = []
+    seen: set[int] = set()
     for item in raw:
-        label = by_label.get(str(item).strip().lower())
-        if label and label not in kept:
-            kept.append(label)
+        if isinstance(item, bool):  # bool is an int subclass: never a passage
+            continue
+        passage = None
+        if isinstance(item, int):
+            passage = by_id.get(item)
+        elif isinstance(item, str):
+            text = item.strip()
+            passage = (
+                by_id.get(int(text))
+                if text.isdigit()
+                else by_label.get(_label_key(text))
+            )
+        if passage is not None and passage["id"] not in seen:
+            seen.add(passage["id"])
+            kept.append(_citation_out(passage))
     return tuple(kept)
+
+
+def _label_key(text: str) -> str:
+    """``owner/repo#L12-L24`` and ``owner/repo (lines 12-24)`` → ``owner/repo``."""
+    return re.split(r"[#(]", (text or "").strip(), maxsplit=1)[0].strip().lower()
+
+
+def _citation_out(passage: dict) -> dict:
+    """The persisted/API shape of a citation (the passage number stays internal)."""
+    return {
+        "label": str(passage.get("label") or ""),
+        "title": str(passage.get("title") or ""),
+        "url": str(passage.get("url") or ""),
+        "lines": str(passage.get("lines") or ""),
+    }
 
 
 def _loads_json_object(raw: str) -> dict:

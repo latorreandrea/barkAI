@@ -262,8 +262,9 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* Citations: the discreet "Sources: <project>" line BarklAI adds to   */
-/* an answer when it used retrieved project READMEs.                   */
+/* Citations: the discreet "Sources: <project> <project>" line BarklAI  */
+/* adds to an answer when it used retrieved passages. Every chip is a   */
+/* link to the cited lines of the cited file on GitHub.                 */
 /* ------------------------------------------------------------------ */
 .sources-line {
     display: flex;
@@ -289,6 +290,21 @@
     padding: .1rem .5rem;
     font-weight: 600;
     color: #64748b;
+    text-decoration: none;
+}
+a.sources-chip-link {
+    cursor: pointer;
+    color: #475569;
+    text-decoration: underline;
+    text-decoration-color: rgba(148, 163, 184, .8);
+    text-underline-offset: 2px;
+    transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+a.sources-chip-link:hover,
+a.sources-chip-link:focus-visible {
+    background: #ffffff;
+    border-color: #64748b;
+    color: #0f172a;
 }
 
 /* ------------------------------------------------------------------ */

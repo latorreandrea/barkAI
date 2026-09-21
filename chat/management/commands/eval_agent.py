@@ -96,6 +96,7 @@ class Command(BaseCommand):
                 reply=result.reply,
                 interview_requested=result.interview_requested,
                 detected_language=detect_language(result.reply),
+                sources=result.sources,
             )
             if reasons:
                 failed.append(case["id"])

@@ -6,14 +6,31 @@ from ninja import Schema
 from pydantic import Field
 
 
+class CitationOut(Schema):
+    """One source BarklAI cited, ready to render as a link.
+
+    ``label`` is the knowledge source (``owner/repo``, or ``profile``) and
+    ``title`` the human name of the passage's section; ``url`` and ``lines`` come
+    from the index, never from the model, so the interface can safely open the
+    cited file at the cited lines (``#L120-L148``). ``lines`` is empty for a
+    whole-file citation (the career profile) and for a chunk indexed before the
+    line ranges were tracked.
+    """
+
+    label: str = ""
+    title: str = ""
+    url: str = ""
+    lines: str = ""
+
+
 class MessageOut(Schema):
     """A single chat message returned to the browser."""
 
     id: int
     sender: str  # "user" | "assistant"
     content: str
-    # Knowledge-base labels BarklAI cited (always empty on a user turn).
-    sources: list[str] = []
+    # Sources BarklAI cited (always empty on a user turn).
+    sources: list[CitationOut] = []
     created_at: datetime
 
 
@@ -61,9 +78,9 @@ class BarkleyOut(Schema):
     # True when the agent thinks the recruiter is unsure what to ask, so the UI
     # can offer the quick-question chips inside the speech bubble.
     suggest_questions: bool = False
-    # Knowledge-base labels the reply is grounded in (already validated against
-    # the retrieved chunks, so an invented label can never appear here).
-    sources: list[str] = []
+    # Sources the reply is grounded in, as validated citations (label, title,
+    # url, line range): an invented passage number or label can never appear here.
+    sources: list[CitationOut] = []
     # What the conversation knows about the recruiter (see ContactInfo): the UI
     # uses it to prefill the hand-off form for confirmation.
     contact: ContactInfo = Field(default_factory=ContactInfo)

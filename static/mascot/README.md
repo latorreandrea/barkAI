@@ -6,12 +6,12 @@ to `/static/mascot/<state>.mp4` based on the BarklAI state returned by the API.
 
 | File                | When it plays                                      |
 |---------------------|----------------------------------------------------|
-| `idle.mp4`          | Default state while waiting for the recruiter      |
+| `idle.mp4`          | BarklAI resting: nothing to do — including after a minute without activity |
 | `sniffing.mp4`      | First-visit onboarding: BarklAI approaches the visitor |
-| `searching.mp4`     | While the API/agent is working on a reply          |
+| `searching.mp4`     | While the API/agent works on a reply (played **in full** the first time) |
 | `typing.mp4`        | While the visitor is writing in the composer       |
-| `speaking.mp4`      | BarklAI delivering his answer                      |
-| `celebrating.mp4`   | An interview has been requested 🎉                 |
+| `speaking.mp4`      | BarklAI delivering his answer (starts once the searching take is over) |
+| `celebrating.mp4`   | An interview has been requested 🎉 (rests on its own a minute later) |
 
 The clips are real footage: the filenames above are what the UI requests. The
 whole set is served from the same container as the app (see the Deployment
@@ -36,6 +36,27 @@ instead of a gap. `typing` is switched from the composer's `input` event (see 3b
 most likely to need next are fetched while the page is quiet. A clip that fails to load does not blank the
 stage: the hand-over is cancelled and the mascot keeps the previous reaction (the emoji fallback shows
 when there is nothing else to show).
+
+## When the stage changes hands
+
+A reaction is not an end state: the stage always comes back to `idle.mp4`, and the *first* `searching`
+of a visit is played to its end.
+
+* **`idle` is the resting state.** BarklAI returns to it after **a minute without activity** — the same
+  countdown that reveals the quick-question chips, so the visitor sees a resting dog and a suggested
+  question at the same moment — and **a minute after `celebrating` starts**, so an interview request is
+  celebrated properly without the clip looping for the rest of the session.
+* **The visitor always wins the stage**: writing in the composer switches to `typing` (1.2 s after the
+  keys stop it hands the stage back to whatever was on screen), sending switches to `searching`, and the
+  answer switches to `speaking`/`celebrating`.
+* **The first `searching` clip of a page load plays in full.** It is the 17 s take the visitor was
+  promised, so BarklAI holds it — and the answer, which is typed when the clip hands over — until the
+  loop reaches its seam. Later searches are cut the moment the reply is ready, exactly like every other
+  hand-over. The duration is read from the file itself (`video.duration`), never hard-coded.
+* **A background tab cannot stall the stage**: the hold is bounded by the clip's length plus
+  `FULL_CLIP_GRACE_MS` (and by `FIRST_TAKE_FALLBACK_MS` if the metadata never arrived), because a hidden
+  page pauses the video while timers keep ticking. The deadline only fires when the clip stopped
+  advancing; it is not a UX cut-off.
 
 ## Frame geometry (the 472:720 box)
 

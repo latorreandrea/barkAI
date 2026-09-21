@@ -42,6 +42,7 @@ Powered by a Retrieval-Augmented Generation (RAG) pipeline, BarkAI indexes open-
 - [Developer Guide](#developer-guide)
   - [Project layout](#project-layout)
   - [Conventions](#conventions)
+  - [Management commands](#management-commands)
   - [Useful commands](#useful-commands)
 - [Testing](#testing)
 - [Deployment](#deployment)
@@ -113,7 +114,10 @@ to BarklAI's state: `idle`, `sniffing`, `searching`, `typing`, `speaking`, `cele
 are his own states; `typing` is the **visitor's**: it plays while a message is being written in the
 composer — detected client-side on the `input` event, so paste, dictation and phone keyboards count
 too — and it hands the stage back 1.2 s after the keys stop (the details are in the comment above
-`noteComposerTyping()` in `static/js/chat.js`). The clips
+`noteComposerTyping()` in `static/js/chat.js`). `idle` is the resting state and it always comes back:
+after a minute without activity (the same countdown that offers the quick-question chips) and a minute
+after `celebrating` starts — and the **first `searching` of a page load plays to its end** before the
+answer is spoken (see [the mascot notes](static/mascot/README.md)). The clips
 blend straight into the white page (no border, no circle) and are H.264 + yuv420p at 24 fps. They are
 the **vertical take at 472x720** (the shape the player crops to with `object-cover` inside a `472:720`
 box), re-encoded from 1280x720 exports that pillarboxed it in black — geometry, numbers and the export
@@ -169,10 +173,10 @@ Danish question retrieve English project READMEs.
 5. **Interview-intent detection + hand-off** — decided by the agent (`interview_requested`); the session is flagged, BarklAI switches to the `celebrating` clip, a **contact form** appears in the composer, and every capture becomes an `InterviewRequest` row (who, how to reply, when) with an **email notification** to Andrea — see [Agent Hardening](#agent-hardening-v04).
 6. **On-demand question suggestions** — when the recruiter seems unsure (`suggest_questions`) or after a spell of inactivity, the UI offers quick-question chips inside the speech bubble.
 7. **Interactive Web UI** — responsive single-page chat (compact sticky header on mobile; mascot panel + chat column on desktop) styled with a single **compiled, minified Tailwind stylesheet** (`static/css/barkai.css`) and **external deferred JS** — no runtime CDN, no inline `<style>`/`<script>`, so browsers cache the assets across pages.
-8. **BarklAI reaction clips** — `idle`, `sniffing`, `searching`, `typing`, `speaking` and `celebrating` MP4s under `static/mascot/` drive the mascot animation: the vertical 472x720 take, cropped in a `472:720` box (`object-cover`), swapped on a two-element stage so the hand-over never blanks or blinks, with an emoji fallback when a clip is missing. `typing` is the visitor's own state — it reacts to the message being written in the composer — see [the mascot notes](#how-the-animations-were-made).
+8. **BarklAI reaction clips** — `idle`, `sniffing`, `searching`, `typing`, `speaking` and `celebrating` MP4s under `static/mascot/` drive the mascot animation: the vertical 472x720 take, cropped in a `472:720` box (`object-cover`), swapped on a two-element stage so the hand-over never blanks or blinks, with an emoji fallback when a clip is missing. `typing` is the visitor's own state — it reacts to the message being written in the composer — and `idle` is the resting clip, restored after a minute of inactivity and a minute after `celebrating`, with the first `searching` of a visit played in full — see [the mascot notes](#how-the-animations-were-made).
 9. **Custom error pages** — project-level `403`, `404` and `500` templates.
 10. **Environment-driven settings** — values read from the environment only (python-dotenv is intentionally not used); blank values fall back to safe defaults, and `DEBUG` defaults to `True` for a frictionless local start.
-11. **Automated tests** — index view, chat REST API, the agent service (Groq mocked, no network), the knowledge sync + indexing commands, the i18n switching, the interview hand-off + notifications, the guardrails, the citation plumbing, the golden-set evaluator, the scheduled-jobs chain and the GDPR surface (**101 tests**; the pgvector round-trip runs only on PostgreSQL).
+11. **Automated tests** — index view, chat REST API, the agent service (Groq mocked, no network), the knowledge sync + indexing commands, the i18n switching, the interview hand-off + notifications, the guardrails, the citation plumbing, the golden-set evaluator, the scheduled-jobs chain and the GDPR surface (**136 tests**; the pgvector round-trip runs only on PostgreSQL).
 12. **Retrieval-augmented answers (RAG)** — the knowledge base is chunked and embedded (`KnowledgeChunk` + **pgvector**). With `RAG_ENABLED=True` only the most relevant chunks (native `<=>` cosine distance on PostgreSQL) are sent to the model; the curated **career profile is always injected verbatim** and kept out of the similarity search (see below), so it cannot crowd the project chunks out of the prompt. Without RAG the whole corpus is stuffed into the prompt as a fallback.
 13. **Bilingual UI and agent (EN/DA)** — Django i18n (`{% trans %}` + `JavaScriptCatalog`) with `Accept-Language` detection and a navbar toggle; the agent answers in the recruiter's language, enforced by a detect-and-retry **language guard** (see [Language parity](#language-parity-en-and-da)).
 14. **GDPR-ready** — a plain-language privacy notice (EN/DA), one-click **erasure** of the conversation (`POST /session/delete/`), a retention job (`purge_old_sessions`) and the full processing register inline in [Privacy & GDPR](#privacy--gdpr).
@@ -181,7 +185,7 @@ Danish question retrieve English project READMEs.
 17. **Public-endpoint guardrails** — a message length cap plus fixed-window rate limiting per session and per IP (`chat/throttle.py`), so a public LLM endpoint cannot be trivially drained.
 18. **SMTP self-check** — `python manage.py send_test_email` proves the mail configuration (e.g. a Gmail app password) before you trust the notifications.
 19. **Golden-set evaluation** — a curated, versioned set of recruiter questions (EN + DA) is scored against the live agent by `python manage.py eval_agent`, which exits non-zero when a case fails (see [Evaluation suite](#evaluation-suite-golden-set)).
-20. **Cited sources** — answers name the project READMEs they rely on (`SOURCES_RULES` + server-side validation), the citations are stored on the message and rendered as chips under the reply (see [Cited sources](#cited-sources)).
+20. **Cited sources** — retrieval numbers the passages it hands the model (`CITABLE PASSAGES`), the answer cites them **by number**, and the server resolves each number into a `{label, title, url, lines}` citation that points at the cited lines on GitHub (`…/README.md#L120-L148`). The chips under the reply — and in the history, since `ChatMessage.sources` is persisted — are clickable links (see [Cited sources](#cited-sources)).
 21. **Knowledge freshness** — `python manage.py knowledge_status` reports coverage and staleness (and can fail a scheduled job), so a README change cannot silently fail to reach the agent.
 22. **Model fallback** — if the primary Groq model fails (a decommissioned *preview* model, a 400/404), the same request is retried once on `GROQ_MODEL_FALLBACK` (a production model) before giving up.
 23. **Production security by default** — with `DEBUG=False` the app enforces HTTPS (`SECURE_SSL_REDIRECT`, HSTS, secure session/CSRF cookies) from environment-driven flags, and `python manage.py check --deploy` is clean (see [Production Readiness](#production-readiness-v04)).
@@ -364,9 +368,9 @@ GROQ_MODEL (preview)  ──fails──▶  GROQ_MODEL_FALLBACK (production: lla
 
 ### Evaluation suite (golden set)
 
-`chat/evals/golden_set.json` is a curated, versioned set of **19 recruiter questions (10 English,
-9 Danish)** carrying the facts each answer must contain, the claims it must never make, the expected
-language and the expected interview flag.
+`chat/evals/golden_set.json` is a curated, versioned set of **21 recruiter questions (11 English,
+10 Danish)** carrying the facts each answer must contain, the claims it must never make, the expected
+language, the expected interview flag and the citations the reply has to carry.
 
 ```bash
 python manage.py eval_agent --check-only   # validate the file: no model, no API key
@@ -384,8 +388,15 @@ fields (matching is case-insensitive):
 | `must_contain` | every string must appear |
 | `must_contain_any` | at least one alternative must appear |
 | `must_not_contain` | none may appear — for claims that must never be made (personal identifiers, invented technologies, off-topic content) |
+| `cites_any` | at least one of these labels must be cited |
+| `cites_something` | `true`: the reply must carry at least one citation (`false`: it must carry none) |
 | `language` | the reply must be detected in this language |
 | `interview_requested` | the structured flag must match |
+
+One check is **never opt-in**: every reply must respect the prose contract, so a bullet list, a
+`Sources: …` line or a bracketed list of labels/passage numbers fails the case whatever else it
+asserts (`chat.evals.format_reasons`). That is the regression the suite exists to catch — see B-009 in
+the [Bug Log](#bug-log).
 
 The first scored run came out at **14/19**, and the failures were worth more than the score: three
 were real (the agent echoed a CPR reference the profile should never have contained) and two were
@@ -398,29 +409,45 @@ produces the poem) instead of by exact phrase.
 
 ### Cited sources
 
-Every answer can name the project READMEs it leaned on, and the recruiter sees them as small chips
-under the reply — in the history too, because `ChatMessage.sources` is persisted:
+Every answer can show **where it came from**, and the recruiter can open the cited lines themselves.
+Retrieval numbers the passages it injects, the model cites those numbers, and the server turns each
+number into a link — so a citation is verifiable evidence instead of a decorative chip:
 
 ```
-retrieval ──▶ CITABLE SOURCES block ──▶ model proposes ["repo/a", "repo/x"]
-                                                  │
-                                                  ▼
-                          _sanitize_sources() keeps only the labels retrieval
-                          actually returned ──▶ message row + API response
+retrieve() ──▶ [1] profile · Career profile                ──▶ model returns "sources": [2, 4]
+                [2] latorreandrea/barkAI · Deployment, lines 120-148        │
+                [3] latorreandrea/fiestaPa · Stack                          ▼
+                [4] latorreandrea/patchland · Tests        _resolve_citations() maps 2 and 4 back onto
+                                                           the retrieved passages and attaches
+                                                           label + title + url + lines ──▶ message row
 ```
 
-* `SOURCES_RULES` asks for the exact labels and forbids inventing one; the allowed list is injected
-  as a `CITABLE SOURCES` block (or an explicit "none available", so the model returns `[]`).
-* **The server decides**: `chat/services.py:_sanitize_sources()` drops any label retrieval did not
-  return, so a fabricated citation can never reach a recruiter — the same *model proposes, server
-  decides* idea as the language guard.
-* The prompt section and the labels come from **one** call to
-  `build_retrieved_context_with_sources()`: a second `retrieve()` would double the embedding cost
-  and the latency.
-* With `RAG_ENABLED=False` no per-chunk retrieval happens, so there are no citable labels and the
+* **The model never writes a URL.** It only returns integers (`SOURCES_RULES` plus a numbered
+  `CITABLE PASSAGES` block), and `chat.services._resolve_citations()` drops any number retrieval did
+  not return — the same *model proposes, server decides* idea as the language guard. The legacy label
+  form is still understood, so answers stored by the previous version keep rendering.
+* **The link is the cited lines.** `build_index` records the 1-based `start_line` / `end_line` of every
+  chunk and `KnowledgeDocument.url` is the README's GitHub blob URL, so a citation becomes
+  `…/README.md#L120-L148`. The chip shows the section (`Deployment · L120-148`) and its tooltip the
+  full `owner/repo · section · L120-148`; a chunk indexed before the spans existed (`0`), or the career
+  profile (which has no public file unless you set `PROFILE_URL`), links the file alone.
+* **Nothing is re-embedded to keep them honest.** The chunk text stays byte-identical to what the
+  previous version produced, so a document that merely moved (say, lines added above a chunk) refreshes
+  its span with a cheap `UPDATE` instead of a new embedding call.
+* **The prose stays prose.** The contract asks for sentences, and `_strip_sources_lines()` removes the
+  citation-shaped lines the model appends anyway (`Sources: ['repo/a']`, `Kilder: …`, a bare `[1, 2]`, a
+  bullet list of labels) on **every** path: JSON, salvaged prose and the language retry. A real sentence
+  that merely starts with a dash survives — the two lists are a test table in both languages (B-009).
+* **Stored and rendered.** The citations live on `ChatMessage.sources` (a JSON list of
+  `{label, title, url, lines}`) so they survive a reload; the API serializes them as `CitationOut`
+  (legacy label strings still serialize) and `chat.js` renders each chip as an `<a target="_blank"
+  rel="noopener noreferrer">` — a `<span>` when there is no URL. The chip label is translated
+  (`Sources` / `Kilder`) through a `data-label` attribute, so it lives in the Django catalogue.
+* The passages and the prompt section come from **one** `retrieve()` call
+  (`build_retrieved_context_with_citations()`): a second one would double the embedding cost and the
+  latency.
+* With `RAG_ENABLED=False` no per-chunk retrieval happens, so there are no numbered passages and the
   chips stay empty.
-* The citation label is translated (`Sources` / `Kilder`) and passed to `chat.js` through a
-  `data-label` attribute, so it lives in the Django catalogue like every other string.
 
 ### Knowledge freshness
 
@@ -522,7 +549,7 @@ the runtime `PATH` — the bare command does not exist in the container (see
 
 | Job | What it does |
 | --- | --- |
-| `test` | installs requirements, compiles the `.mo` catalogues, validates the golden set offline (`eval_agent --check-only`), runs the **101 tests** on SQLite, then `check --deploy` with `DEBUG=False` and a dummy `DATABASE_URL` |
+| `test` | installs requirements, compiles the `.mo` catalogues, validates the golden set offline (`eval_agent --check-only`), runs the **136 tests** on SQLite, then `check --deploy` with `DEBUG=False` and a dummy `DATABASE_URL` |
 | `static` | `npm ci` + `npm run css:build` + `git diff --exit-code static/css/barkai.css`, so a new Tailwind class can never be missing from the committed stylesheet |
 
 > The live evaluation (`eval_agent`) is **not** in CI on purpose: it costs real Groq calls and takes ~10 minutes.
@@ -570,11 +597,16 @@ GitHub READMEs ┘ ────────▶ build_index  ──▶ KnowledgeC
 
 1. `sync_knowledge` stores each source as a `KnowledgeDocument` (curated profile + every README,
    minus `GITHUB_EXCLUDE_REPOS`; `--prune` removes the documents that are no longer sourced).
-2. `build_index` splits them into **paragraph-aware chunks** and embeds only the new/changed ones
-   (content hash) with the configured provider, storing 1024-dim vectors in `KnowledgeChunk` (pgvector).
+2. `build_index` splits them into **paragraph-aware chunks**, records each chunk's **line span**
+   (`start_line` / `end_line`, so a citation can point at `#L120-L148`) and embeds only the new/changed
+   ones (content hash) with the configured provider, storing 1024-dim vectors in `KnowledgeChunk`
+   (pgvector). A chunk whose text is unchanged but whose position moved only gets its span refreshed —
+   no embedding call, no drift in the vectors.
 3. At query time `chat/rag.py` embeds the question and retrieves the closest chunks
-   (`CosineDistance` on PostgreSQL; a Python cosine fallback on other backends), which are injected
-   into the system prompt.
+   (`CosineDistance` on PostgreSQL; a Python cosine fallback on other backends). Every hit carries its
+   source, its section and its line span, and the passages are injected into the system prompt
+   **numbered**, so the model can cite them and each citation can be resolved into a link (see
+   [Cited sources](#cited-sources)).
 4. The **career profile is always injected verbatim** and is deliberately **excluded from the
    similarity search**: it is short, it applies to every question, and it used to match even the
    vaguest query — stealing the top slots from the project chunks.
@@ -642,6 +674,7 @@ but **blank** falls back to its default, so you only set what you need.
 | `GITHUB_INCLUDE_FORKS` | Ingest forks too (default `false`). | your choice |
 | `GITHUB_API_TIMEOUT_SECONDS` | GitHub API timeout (default `15`). | your choice |
 | `GITHUB_README_MAX_CHARS` | Max characters stored per README (default `14000`). | your choice |
+| `PROFILE_URL` | Public URL of the curated profile file, so a citation that points at the profile is clickable too (e.g. its GitHub blob URL). Blank = the profile chip carries no link. | your choice |
 | `DATABASE_URL` | PostgreSQL connection string (Neon/Supabase) — **the only supported database configuration**. Required for pgvector; with `DEBUG=True` a missing URL falls back to SQLite, with `DEBUG=False` the app raises `ImproperlyConfigured` instead of starting. | your database provider |
 | `EMBEDDING_PROVIDER` | Embeddings backend: `cloudflare` or `none` (default). | your choice |
 | `EMBEDDING_MODEL` | Embedding model id (default `@cf/baai/bge-m3`). | Cloudflare model catalogue |
@@ -707,13 +740,13 @@ Interactive docs are served by Django Ninja at `/api/docs` (raw OpenAPI schema a
 ### GET /api/chat/history/{session_id}
 
 Returns the persisted conversation for the session, creating it if it does not exist yet.
-Response: `{session_id, interview_requested, messages: [{id, sender, content, sources, created_at}], contact: {hr_name, hr_email, company_name}}` — `sources` are the citations stored with each BarklAI reply (always `[]` on a recruiter turn), and `contact` is what the conversation already knows about the recruiter, so the hand-off form can open prefilled (see [Interview hand-off](#interview-hand-off)).
+Response: `{session_id, interview_requested, messages: [{id, sender, content, sources, created_at}], contact: {hr_name, hr_email, company_name}}` — `sources` are the citations stored with each BarklAI reply, one `{label, title, url, lines}` object per source (always `[]` on a recruiter turn; see [Cited sources](#cited-sources)), and `contact` is what the conversation already knows about the recruiter, so the hand-off form can open prefilled (see [Interview hand-off](#interview-hand-off)).
 
 ### POST /api/chat/send
 
 Persists the recruiter turn, generates BarklAI's reply and persists it too.
 Request body: `{session_id, message, hr_name?, hr_email?, company_name?}`.
-Response: `{session_id, reply, barkley_state, interview_requested, suggest_questions, sources, contact}` — `barkley_state` drives the mascot clip (e.g. `speaking`, `celebrating`, `searching`) and `suggest_questions` tells the UI to offer the quick-question chips. `sources` lists the knowledge-base labels the reply is grounded in, already validated against the retrieved chunks (see [Cited sources](#cited-sources)), and is persisted with the assistant message. `contact` echoes back the details the conversation knows (see [Interview hand-off](#interview-hand-off)), including an address the recruiter typed in the message itself. Validation: `message` is capped at 2000 characters (`422` when exceeded) and the endpoint is rate-limited (`429`) per session and per IP. When `interview_requested` is true the session also gets an `InterviewRequest` row, and the notification goes out immediately if the payload — or the message — already carried an email.
+Response: `{session_id, reply, barkley_state, interview_requested, suggest_questions, sources, contact}` — `barkley_state` drives the mascot clip (e.g. `speaking`, `celebrating`, `searching`) and `suggest_questions` tells the UI to offer the quick-question chips. `sources` are the citations the reply is grounded in: the model returns passage **numbers**, the server resolves them into `{label, title, url, lines}` objects whose `url` + `lines` open the cited file at the cited lines on GitHub (see [Cited sources](#cited-sources)), and they are persisted with the assistant message. `contact` echoes back the details the conversation knows (see [Interview hand-off](#interview-hand-off)), including an address the recruiter typed in the message itself. Validation: `message` is capped at 2000 characters (`422` when exceeded) and the endpoint is rate-limited (`429`) per session and per IP. When `interview_requested` is true the session also gets an `InterviewRequest` row, and the notification goes out immediately if the payload — or the message — already carried an email.
 
 ### POST /api/chat/contact
 
@@ -751,7 +784,7 @@ exposes no personal data — see [Health check](#health-check).
 barkai/                  # settings + root URLconf (Ninja API at /api/) + views.py (the /healthz probe)
 chat/                    # the chat application
 ├── api/                 # Django Ninja package (schemas.py + router.py)
-├── management/commands/ # sync_knowledge · build_index · knowledge_status · purge_old_sessions · eval_agent · run_scheduled_jobs · send_test_email · retry_interview_notifications
+├── management/commands/ # one module per command: sync_knowledge · build_index · knowledge_status · purge_old_sessions · eval_agent · run_scheduled_jobs · send_test_email · retry_interview_notifications
 ├── knowledge/           # andrea_profile.md (curated career profile, versioned)
 ├── embeddings.py        # pluggable embedding providers (Cloudflare Workers AI)
 ├── rag.py               # retrieval: pgvector search / Python cosine fallback
@@ -787,7 +820,7 @@ Dockerfile               # multi-stage production image (web service + scheduled
 - **Service seam** — `chat/services.py` owns the agent: it calls Groq (JSON mode) when `GROQ_API_KEY` is set and otherwise returns consistent, in-character fallbacks. The persona + output contract live in `chat/prompts.py`, and the facts come from `KnowledgeDocument`.
 - **Structured output** — the model is asked for `{reply, interview_requested, suggest_questions, sources}`; parsing is tolerant, and a **prose answer that JSON mode refuses** (`json_validate_failed`) is salvaged rather than dropped (see [Agent Quality](#agent-quality-v04)).
 - **Evaluation is data, not code** — the golden set lives in `chat/evals/golden_set.json` and the matching logic in `chat/evals/__init__.py` (stdlib only). Extend the JSON whenever a new promise is made to the agent, and keep every `must_not_contain` term genuinely **absent from the corpus**.
-- **Citations are validated server-side** — the model may only name labels retrieval returned (`_sanitize_sources`); never trust a generated label, and never let it reach a recruiter unvalidated.
+- **Citations are validated server-side** — the model may only cite the passage **numbers** retrieval returned (`_resolve_citations`), and the label, URL and line range are attached by the server; never trust a generated label or link, and never let one reach a recruiter unvalidated. The agent also must not write the citation list into the prose: `OUTPUT_CONTRACT` forbids it and the golden set enforces it (B-009).
 - **Freshness is a job** — `knowledge_status --fail-on-stale` is what makes the corpus's age visible; schedule it next to `sync_knowledge`/`build_index`.
 - **Contractual media names** — the UI switches the mascot `<video>` to `/static/mascot/<state>.mp4`, so the clip filenames must not change (details in `static/mascot/README.md`). The clips are the vertical take at 472x720 and the player keeps a `472:720` box with `object-cover`; the ratio is measured, not guessed (see B-008).
 - **Cache-bust the assets, they are cached for a year** — WhiteNoise serves `static/` with `max-age=31536000` and the non-Manifest storage keeps every URL stable, so a plain CSS/JS/clip change would reach nobody who had already visited. Every static URL therefore carries `?v={{ ASSET_VERSION }}` (`barkai.context_processors.asset_version`), a token derived from the assets themselves (`_asset_version_default` in `barkai/settings.py`), so a rebuild moves it automatically and a deploy that changes nothing keeps the cache warm. Export `ASSET_VERSION` only to pin it by hand.
@@ -805,9 +838,123 @@ npm run css:build    # after adding/changing Tailwind classes or site-wide CSS
 # npm run css:watch  # recompile automatically while editing
 ```
 
+### Management commands
+
+Everything that runs *outside* a request lives in `chat/management/commands/` — **one module per
+command**, which is all Django needs to expose it as `python manage.py <name>`:
+
+```
+chat/
+├── management/
+│   ├── __init__.py              # package marker: without it Django finds nothing
+│   └── commands/
+│       ├── __init__.py
+│       ├── sync_knowledge.py    ──▶  python manage.py sync_knowledge
+│       ├── build_index.py       ──▶  python manage.py build_index
+│       └── …                    (8 commands in total)
+```
+
+Django discovers them through `INSTALLED_APPS` (only `chat` ships commands, which is why
+`manage.py help` lists them under `[chat]`), and the **file name is the command name** — there is no
+registry to update and no decorator to remember. Every module exposes exactly one class:
+
+```python
+class Command(BaseCommand):
+    help = "One line, shown by `manage.py help`."
+
+    def add_arguments(self, parser):               # argparse, nothing bespoke
+        parser.add_argument("--dry-run", action="store_true", help="Only report.")
+
+    def handle(self, *args, **options):            # the work
+        if options["dry_run"]:                     # --dry-run -> options["dry_run"]
+            self.stdout.write("would delete 3 conversation(s)")
+            return
+        self.stdout.write(self.style.SUCCESS("Purged 3 conversation(s)."))
+```
+
+* **Flags** are declared in `add_arguments()`; Django adds `--verbosity`, `--settings`,
+  `--pythonpath`, `--traceback` and the colour/check flags (`--no-color`, `--force-color`,
+  `--skip-checks`) for free (`python manage.py help build_index`).
+* **Output** goes to the command's own `self.stdout` / `self.stderr`, with
+  `self.style.SUCCESS/ERROR/WARNING/MIGRATE_HEADING` for colour — and because it is a stream, a
+  caller can capture it (`call_command(..., stdout=buffer)`), which is what the tests do.
+* **Exit codes are the interface.** `CommandError` is for a bad argument or bad data (message on
+  stderr, exit 1); `SystemExit(1)` is what a command raises when an *external dependency* failed
+  (GitHub unreachable, embedding provider down). The difference matters: `SystemExit` derives from
+  `BaseException`, so a plain `except Exception` will **not** catch it — `run_scheduled_jobs` catches
+  it explicitly for exactly that reason (see [Scheduled jobs](#scheduled-jobs)).
+* **Composition** uses `call_command("build_index", "--no-embed")`; that is also how every command is
+  tested, in-process and without spawning a subprocess.
+* **Scripts stay scripts when Django is not needed.** `scripts/compile_messages.py` (compiles the
+  `.mo` catalogues) and `scripts/check_cloudbuild.py` (validates the Cloud Build YAML) are plain Python
+  on purpose: no settings, no database, runnable anywhere — a management command would only add
+  bootstrap weight.
+
+The eight commands fall into three families — the **knowledge pipeline** (`sync_knowledge`,
+`build_index`), **maintenance** (`purge_old_sessions`, `retry_interview_notifications`,
+`send_test_email`) and the **quality gates** (`knowledge_status`, `eval_agent`,
+`run_scheduled_jobs`) — and they all share the same habits: idempotent by content hash,
+`--dry-run` on anything that deletes, exit codes as the alert channel, and no interactive prompt,
+because they run unattended inside Cloud Run Jobs.
+
+| Command | What it does | Main flags | Needs | Where it runs | Tests touching it |
+| --- | --- | --- | --- | --- | --- |
+| `sync_knowledge` | Loads the curated profile + every configured GitHub README into `KnowledgeDocument`, idempotently by content hash (and refreshes only the title/URL when the text is unchanged) | `--profile-only` · `--prune` | DB + GitHub | your laptop (also **against production**) · daily job | 12 |
+| `build_index` | Chunks the documents, records each chunk's **line span** and embeds the new/changed chunks into pgvector | `--force` · `--source` · `--no-embed` | DB + embedding provider | laptop (also against production) · daily job | 10 |
+| `knowledge_status` | Reports coverage, unembedded chunks and documents older than the window | `--days` · `--fail-on-stale` | DB | daily job (alerts) · manual | 7 |
+| `eval_agent` | Scores the live agent against the EN/DA golden set; exits non-zero when a case fails | `--check-only` · `--only` · `--verbose` | Groq (not for `--check-only`) | CI · manual | 1 |
+| `run_scheduled_jobs` | The maintenance chain: sync → index → retry notifications → freshness check | `--dry-run` · `--only` · `--no-prune` | all of the above | daily Cloud Run Job | 7 |
+| `retry_interview_notifications` | Re-sends the notifications still pending (`notified_at` NULL and an email captured) | `--dry-run` | DB + SMTP | daily job · manual | 7 |
+| `purge_old_sessions` | Deletes conversations past the retention window (cascades to messages and interview requests) | `--days` · `--dry-run` | DB | weekly job · manual | 2 |
+| `send_test_email` | Proves the SMTP setup works, so the first real notification is not the test | `--to` | SMTP | manual | 2 |
+
+The last column counts the test methods that exercise the command, **including the ones that reach it
+through the `run_scheduled_jobs` chain** — that is why `sync_knowledge` and `build_index` are higher
+than the number of tests in their own classes: the chain asserts on them too.
+
+#### The maintenance chain (`run_scheduled_jobs`)
+
+```python
+STEPS = (                       # order matters: the report runs last, on the corpus
+    Step("sync_knowledge", {"prune": True}),    # the steps above just refreshed
+    Step("build_index"),
+    Step("retry_interview_notifications"),
+    Step("knowledge_status", {"fail_on_stale": True}),
+)
+```
+
+* **Every step runs even when an earlier one fails**, and each outcome is reported; the command exits
+  non-zero if anything failed, which is what turns the Cloud Scheduler execution red. A shell `&&`
+  chain would stop at the first error and skip the report.
+* Each step's output is captured in a buffer and reprinted, so it lands in Cloud Logging *and* can be
+  scanned: a step that prints `skipping github` or `embedding_provider is 'none'` is reported as a
+  **warning** even though it "succeeded". Without that, an environment missing `GITHUB_USERNAME` would
+  keep reporting a healthy job while only the profile was being synced.
+* `--prune` is on by default because the daily job is what keeps the corpus honest, and it is safe
+  unattended: `sync_knowledge` deletes stale documents only **after** a fully successful GitHub fetch.
+  `--no-prune` and `--only <step>` exist for the cautious run.
+* Cloud Run side: see [Scheduled jobs](#scheduled-jobs) (one job for the chain, one for retention, and
+  the reminder that a job does not inherit the service's environment variables).
+
+#### Adding a command
+
+1. Create `chat/management/commands/<name>.py` — the file name is the command name.
+2. Open with a docstring that shows the real invocations (`python manage.py <name>`, each flag on its
+   own line), because that docstring is what a reader lands on first.
+3. Declare the flags in `add_arguments()`; add `--dry-run` if the command writes or deletes anything.
+4. Do the work in `handle()` and report with `self.stdout.write(self.style.…())`; use `CommandError`
+   for bad input/data and `SystemExit(1)` only for a failed external dependency.
+5. Test it with `call_command(...)` (`stdout=StringIO()` to assert the output) — the suite already does
+   this for every command.
+6. Update this table, the [project layout](#project-layout) line, and `STEPS` in `run_scheduled_jobs`
+   if the command belongs to the daily chain.
+
 ### Useful commands
 
+A quick reference; see [Management commands](#management-commands) for what each one does.
+
 ```bash
+python manage.py help               # list the available commands
 python manage.py check              # sanity check
 python manage.py migrate            # apply migrations (creates the pgvector extension)
 python manage.py sync_knowledge     # (re)load the profile + GitHub READMEs into the DB
@@ -833,7 +980,13 @@ npm run css:build                   # rebuild static/css/barkai.css after templa
 python manage.py test
 ```
 
-The suite (`chat/tests.py`, **112 tests**) covers: the index view; the history endpoint; `send` persisting both turns; the interview flag; the agent service with the **Groq client mocked** (JSON parsing, friendly fallbacks, the bilingual offline heuristics, the **language guard** — retry once, keep the first answer if the retry also fails, skip the retry when the languages match, honour `AGENT_LANGUAGE_GUARD=False` — and the **JSON-mode salvage** of a refused prose answer); `detect_language()` itself; the citation plumbing (a fabricated label is dropped, the API returns and persists `sources`, user turns carry none); the golden-set evaluator (file shape, both languages, PASS/FAIL reasons); retrieval (profile always injected, profile never searched, per-source diversity cap); the interview hand-off (capture rules including the corrected-email case, the `/api/chat/contact` endpoint, the notification email in a locmem outbox, "never notified twice", details stored even with notifications disabled, cascade on erasure, the address extraction from a message and the `contact` echo the form prefills from); the guardrails (2000-character cap → `422`, throttle → `429`, `0` disables it); the knowledge commands (`sync_knowledge` incl. the `GITHUB_EXCLUDE_REPOS` filter and `--prune`, `build_index` chunking + hash idempotency, `knowledge_status` coverage/staleness/exit codes, `purge_old_sessions`); the i18n switching (browser detection, session toggle, JS catalogue); the scheduled-jobs chain (step order, failure aggregation, the `SystemExit` case, warning markers, `--no-prune`, `--dry-run`); the GDPR surface (privacy notice, erasure endpoint, the footer button rendered once and on every page, its Danish copy); and the `403`/`404`/`500` pages.
+The suite (`chat/tests.py`, **136 tests**) covers: the index view; the history endpoint; `send` persisting both turns; the interview flag; the agent service with the **Groq client mocked** (JSON parsing, friendly fallbacks, the bilingual offline heuristics, the **language guard** — retry once, keep the first answer if the retry also fails, skip the retry when the languages match, honour `AGENT_LANGUAGE_GUARD=False` — and the **JSON-mode salvage** of a refused prose answer); `detect_language()` itself; the citation plumbing (passage numbers resolved to `{label, title, url, lines}`, an invented number or label dropped, duplicates collapsed, the legacy label form still accepted, the API returning and persisting the objects, legacy strings still serializing, user turns carrying none, and the prose sanitiser's EN/DA test table with the sentences it must leave alone); the chunker's line spans (paragraph and hard-split cases, the stored `start_line`/`end_line`, a moved chunk refreshed without re-embedding, the section title a citation shows); the golden-set evaluator (file shape, both languages, PASS/FAIL reasons, the always-on prose contract, the `cites_any` / `cites_something` expectations); retrieval (profile always injected, profile never searched, per-source diversity cap, the metadata a citation needs); the interview hand-off (capture rules including the corrected-email case, the `/api/chat/contact` endpoint, the notification email in a locmem outbox, "never notified twice", details stored even with notifications disabled, cascade on erasure, the address extraction from a message and the `contact` echo the form prefills from); the guardrails (2000-character cap → `422`, throttle → `429`, `0` disables it); the knowledge commands (`sync_knowledge` incl. the `GITHUB_EXCLUDE_REPOS` filter and `--prune`, `build_index` chunking + hash idempotency, `knowledge_status` coverage/staleness/exit codes, `purge_old_sessions`, the **recovery command** `retry_interview_notifications` — which requests count
+as pending, a send that stamps `notified_at`, the ones already notified or captured without an address,
+`--dry-run`, disabled notifications and an SMTP failure reported with its own reason — and the SMTP
+self-check `send_test_email`, which reports the backend it will use, falls back to
+`INTERVIEW_NOTIFY_EMAIL` when `--to` is missing and fails cleanly when there is no recipient at all); the i18n switching (browser detection, session toggle, JS catalogue); the scheduled-jobs chain (step order, failure aggregation, the `SystemExit` case, warning markers, `--no-prune`, `--dry-run`); the GDPR surface (privacy notice, erasure endpoint, the footer button rendered once and on every page, its Danish copy); and the `403`/`404`/`500` pages.
+
+The citation chips and the mascot state machine are DOM code, so they are verified against the real `static/js/chat.js` outside the Django suite: a throwaway Node harness (no jsdom) loads the file with a minimal fake DOM, fake `<video>` elements and a **virtual clock**, then drives the real code path and asserts 20 behaviours — the citation chips (link, target/rel, text, tooltip, the legacy string shape, no sources line when nothing was cited), the resting clip coming back after a minute of inactivity and a minute after `celebrating`, `typing` taking the stage (and the resting clip returning, never the last reaction) and the first `searching` of a visit playing its whole clip before the answer is typed, while a later search is cut as soon as the reply is ready.
 
 ### Evaluation (live, on demand)
 
@@ -1024,7 +1177,9 @@ One Cloud Run Job runs the whole maintenance chain, so the scheduler has a singl
 earlier one fails, each outcome is reported, **`SystemExit` is caught explicitly** (that is how
 `sync_knowledge` signals a GitHub error, and it derives from `BaseException`, so a plain
 `except Exception` would let the process die before printing the summary) and the job exits non-zero when
-anything failed — which is what turns the Cloud Scheduler execution red.
+anything failed — which is what turns the Cloud Scheduler execution red. The
+[Management commands](#management-commands) section walks through the chain (and its warning markers)
+step by step.
 
 ⚠️ **A Cloud Run job does not inherit the service's environment variables.** Set them again on the job
 (*Jobs → the job → Edit and deploy new revision → Container → Variables and secrets*), or the app refuses
@@ -1058,7 +1213,7 @@ Developer* at job level) rather than a project-wide role.
 Before a release, the two gates are the test suite and the live evaluation:
 
 ```bash
-python manage.py test                 # 101 tests, offline
+python manage.py test                 # 136 tests, offline
 python manage.py eval_agent           # live score, non-zero exit on failure
 ```
 
@@ -1238,6 +1393,7 @@ Living log of known issues and their lifecycle. New bugs are added here as they 
 | B-006 | 🔴 Active | **The first Cloud Run deploy could never start.** The container's stderr said `sh: 1: exec: gunicorn: not found`, and one second later the platform's default startup TCP probe reported `The instance was not started`. The builder installs with `pip install --target=/install`, which puts the console scripts in a subdirectory of that target, while the runtime stage copied only `site-packages` — so no `gunicorn` executable ever reached the runtime `PATH`. The image built and pushed happily because every build-time step runs as `python manage.py …`, which needs no console script, and Django was never imported, so not one environment variable was ever read. | 2026-09-19 | — | The `CMD` now runs `python -m gunicorn`, which needs no `PATH` entry at all (gunicorn's `__main__` calls the same entry point as the console script), and the build ends with a smoke test — `DEBUG=True python -m gunicorn --check-config barkai.wsgi:application`, which parses the flags *and* imports the app — so an image that cannot start fails the **build** instead of the deploy. Neither the unit suite nor `check --deploy` could have caught it: the bug lives between the build and the boot. Awaiting the rebuild that proves the container starts. |
 | B-007 | 🔴 Active | **A fresh tag could never be deployed: `Image '…:e6a55cc' not found`.** The pipeline built the image with `docker build` and published it through the `images:` block at the end of `cloudbuild.yaml` — but Cloud Build pushes those artifacts only *after* the whole build succeeds, while `deploy-service` runs *during* the build and needs the tag to be in the registry already. So the deploy step always looked for something that did not exist yet; it failed, the build failed with it, and that is precisely why the push never ran. The deadlock meant the commit that fixed B-006 could never reach Cloud Run: the service kept running the previous image. | 2026-09-19 | — | The `build` step now runs `docker build` **and** `docker push` for both tags, so the image is published before anything consumes it, and the `images:` block is gone with a comment recording why it must not come back. Verified before pushing: the extracted step script passes `bash -n` and produces both `docker push` calls with the right image reference against a stub `docker`. Awaiting the build that finally deploys the tag. |
 | B-008 | ✅ Fixed | **A black pillarbox (and a grey hairline) around the mascot.** The reaction MP4s are 1280x720 files whose real content is the vertical take in the middle, pillarboxed in black ~401 px per side — so the player painted a black rectangle around the dog on the white page. Cropping the bars with `object-cover` removed the black but left a grey column at each end of the content (x=401 ≈ 172/255, x=878 ≈ 171/255: the H.264 ringing on the black→white transition), which showed as a hairline down both sides of the player. | 2026-09-20 | 2026-09-20 | The `<video>` now sits in a `472:720` box with `object-cover object-center`, which crops to source columns x=404..875. That width is **measured**, per column, on all six clips (Chrome + `<canvas>`; no ffmpeg was available locally) instead of guessed from the 476 clean pixels: the extra 4 px are what removes both grey hairline columns, and the edge columns now read 253-255 — white on a white page. `chat.css` adds a 1 px white fade on `.js-video-shell::before/::after` as a safety net for future clips. The `ASSET_VERSION` cache-buster (`?v=` on every static asset) shipped with it, because WhiteNoise's one-year `max-age` would otherwise have kept the old stylesheet for every returning visitor. **Phase B** then re-encoded all six clips at that same measured window (`crop=472:720:404:0`, `-an`, crf 28, `-tune animation` — checked frame by frame against the source at 3x zoom), so the files now *are* the 472x720 take: the mascot payload went from 7.5 MB to 3.9 MB (−48%, `searching` 3.3 MB → 1.8 MB) with no visible loss. |
+| B-009 | ✅ Fixed | **The agent pasted its citation list into the answer.** With citations live, the model started appending them to the prose itself — `Sources: ['latorreandrea/fiestapa']`, a `Kilder:` variant, a bare `[1, 2]` passage list or a bullet run of labels — and the recruiter saw it as part of the answer. The stripper meant to remove them ran *only* in the salvaged-prose branch, so the normal JSON path never touched `reply`, and its regex only recognised `sources:` at the start of a line. Found by re-reading a live reply, then pinned down with a test table in both languages. | 2026-09-21 | 2026-09-21 | `_strip_sources_lines()` now runs on **every** path (JSON, salvaged prose, language retry), understands `sources` / `kilder` / `referencer` / `fonti` / `quellen`, bare, bulleted and quoted lists and a bracketed passage list, and drops a line only when every item is a number or a label retrieval actually returned — a real sentence that starts with a dash or names the projects survives. `OUTPUT_CONTRACT` gained an explicit no-lists / no-sources-in-the-prose rule and the golden set now fails any reply that breaks it (`chat.evals.format_reasons`), so the regression cannot come back unnoticed. The same session moved the citations onto passage numbers resolved server-side into `{label, title, url, lines}`, so the chips link the cited lines on GitHub — the model never writes a URL. |
 
 > When a new bug is found, add a row with status 🔴 **Active**, the discovery date and a short description, then fill in the **Fixed** date and the resolution once a fix is verified.
 

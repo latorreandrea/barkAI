@@ -4,10 +4,12 @@
     python manage.py build_index --force      # re-embed everything
     python manage.py build_index --source owner/repo --no-embed
 
-Chunks live in ``KnowledgeChunk`` (content + ``content_hash`` + embedding).
-Re-running is cheap: unchanged chunks are skipped thanks to the hash. The
-command can run from anywhere (e.g. your laptop) as long as the database and
-the embedding credentials are reachable — handy to index production.
+Chunks live in ``KnowledgeChunk`` (content + ``content_hash`` + embedding + the
+line span of the passage inside its document, which is what a citation links to).
+Re-running is cheap: unchanged chunks are skipped thanks to the hash, and when only
+their position moved the command refreshes the span without re-embedding. The
+command can run from anywhere (e.g. your laptop) as long as the database and the
+embedding credentials are reachable — handy to index production.
 """
 from __future__ import annotations
 
@@ -28,28 +30,76 @@ def strip_html_comments(text: str) -> str:
     return _HTML_COMMENT.sub("", text)
 
 
-def split_into_chunks(text: str, max_chars: int) -> list[str]:
-    """Split text into paragraph-aware chunks of at most ``max_chars`` chars."""
-    blocks = [block.strip() for block in text.split("\n\n") if block.strip()]
-    chunks: list[str] = []
+def _line_of(text: str, offset: int) -> int:
+    """1-based line number of a character offset inside ``text``."""
+    return text.count("\n", 0, max(offset, 0)) + 1
+
+
+def iter_chunk_spans(text: str, max_chars: int) -> list[tuple[str, int, int]]:
+    """Split text into chunks, remembering the line span of each one.
+
+    Returns ``(chunk_text, start_line, end_line)`` tuples with 1-based, inclusive
+    line numbers relative to ``text``, so a citation can link the passage itself
+    (``…/README.md#L120-L148``). The chunk *text* is accumulated exactly as
+    :func:`split_into_chunks` always did, so re-indexing keeps the same hashes and
+    unchanged chunks are never re-embedded — only their line span is refreshed.
+    """
+    # Walk the same ``\n\n`` separated blocks, but keep each one's line span so the
+    # lines can be derived from the original text (a paragraph split loses them).
+    blocks: list[tuple[str, int, int, int]] = []
+    offset = 0
+    for part in text.split("\n\n"):
+        stripped = part.strip()
+        if stripped:
+            leading = len(part) - len(part.lstrip())
+            trailing = len(part) - len(part.rstrip())
+            start_offset = offset + leading
+            blocks.append(
+                (
+                    stripped,
+                    _line_of(text, start_offset),
+                    _line_of(text, offset + len(part) - trailing - 1),
+                    start_offset,
+                )
+            )
+        offset += len(part) + 2  # the "\n\n" separator itself
+
+    pieces: list[tuple[str, int, int]] = []
     current = ""
-    for block in blocks:
+    current_start = 0
+    current_end = 0
+    for block, block_start, block_end, block_offset in blocks:
         if len(block) > max_chars:
+            # One paragraph larger than a chunk: split it by characters, keeping
+            # each slice's own line span.
             if current:
-                chunks.append(current)
+                pieces.append((current, current_start, current_end))
                 current = ""
             for start in range(0, len(block), max_chars):
-                chunks.append(block[start : start + max_chars])
+                piece = block[start : start + max_chars]
+                first = block_offset + start
+                pieces.append(
+                    (piece, _line_of(text, first), _line_of(text, first + len(piece) - 1))
+                )
             continue
-        candidate = f"{current}\n\n{block}" if current else block
+        if not current:
+            current, current_start, current_end = block, block_start, block_end
+            continue
+        candidate = f"{current}\n\n{block}"
         if len(candidate) <= max_chars:
             current = candidate
+            current_end = block_end
         else:
-            chunks.append(current)
-            current = block
+            pieces.append((current, current_start, current_end))
+            current, current_start, current_end = block, block_start, block_end
     if current:
-        chunks.append(current)
-    return chunks
+        pieces.append((current, current_start, current_end))
+    return pieces
+
+
+def split_into_chunks(text: str, max_chars: int) -> list[str]:
+    """Split text into paragraph-aware chunks of at most ``max_chars`` chars."""
+    return [piece for piece, _start, _end in iter_chunk_spans(text, max_chars)]
 
 
 def content_hash(text: str) -> str:
@@ -95,24 +145,34 @@ class Command(BaseCommand):
         tally = {"created": 0, "updated": 0, "unchanged": 0}
 
         for document in documents:
-            pieces = split_into_chunks(strip_html_comments(document.content), max_chars)
+            pieces = iter_chunk_spans(strip_html_comments(document.content), max_chars)
             existing = {chunk.ordinal: chunk for chunk in document.chunks.all()}
             pending: list[KnowledgeChunk] = []
 
-            for ordinal, piece in enumerate(pieces):
+            for ordinal, (piece, start_line, end_line) in enumerate(pieces):
                 digest = content_hash(piece)
                 chunk = existing.get(ordinal)
+                span = (start_line, end_line)
                 if chunk is None:
                     chunk = KnowledgeChunk(document=document, ordinal=ordinal)
                     tally["created"] += 1
                 elif chunk.content_hash != digest or options["force"]:
                     tally["updated"] += 1
+                elif (chunk.start_line, chunk.end_line) != span:
+                    # Only the position moved (say, lines added above): the text is
+                    # byte-identical, so the stored embedding is still valid and a
+                    # cheap UPDATE keeps the citation ranges honest.
+                    chunk.start_line, chunk.end_line = span
+                    chunk.save(update_fields=["start_line", "end_line", "indexed_at"])
+                    tally["unchanged"] += 1
+                    continue
                 else:
                     tally["unchanged"] += 1
                     continue
                 chunk.content = piece
                 chunk.content_hash = digest
                 chunk.token_count = max(1, len(piece) // 4)  # rough estimate
+                chunk.start_line, chunk.end_line = span
                 chunk.save()
                 pending.append(chunk)
 

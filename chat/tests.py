@@ -21,7 +21,12 @@ from django.views import defaults
 
 from barkai.context_processors import asset_version
 from chat.embeddings import EmbeddingError
-from chat.evals import evaluate_case, load_golden_set, validate_golden_set
+from chat.evals import (
+    evaluate_case,
+    format_reasons,
+    load_golden_set,
+    validate_golden_set,
+)
 from chat.interviews import capture_interview_request, extract_contact, mark_notified
 from chat.models import (
     ChatMessage,
@@ -35,7 +40,8 @@ from chat.services import (
     FALLBACK_NO_KEY,
     FALLBACK_UNREACHABLE,
     BarkleyResponse,
-    _sanitize_sources,
+    _resolve_citations,
+    _strip_sources_lines,
     detect_language,
     generate_reply,
     get_knowledge_text,
@@ -248,6 +254,94 @@ class RagTests(TestCase):
 
         chunks = split_into_chunks("x" * 25, 10)
         self.assertEqual([len(chunk) for chunk in chunks], [10, 10, 5])
+
+    def test_chunk_line_spans_point_at_the_source_lines(self):
+        from chat.management.commands.build_index import iter_chunk_spans
+
+        text = "# Title\n\npara one\n\npara two"
+        spans = iter_chunk_spans(text, 10)
+        self.assertEqual(
+            list(spans), [("# Title", 1, 1), ("para one", 3, 3), ("para two", 5, 5)]
+        )
+
+    def test_hard_split_chunks_keep_their_own_line_span(self):
+        from chat.management.commands.build_index import iter_chunk_spans
+
+        spans = iter_chunk_spans("aaaa\nbbbb\ncccc", 5)  # no blank line to split on
+        self.assertEqual([piece for piece, _s, _e in spans], ["aaaa\n", "bbbb\n", "cccc"])
+        self.assertEqual(
+            [(start, end) for _piece, start, end in spans], [(1, 1), (2, 2), (3, 3)]
+        )
+
+    def test_build_index_stores_the_line_span_of_each_chunk(self):
+        KnowledgeDocument.objects.create(
+            kind=KnowledgeDocument.Kind.GITHUB_README,
+            source="o/r",
+            content="para one\n\npara two",
+        )
+        with override_settings(RAG_CHUNK_MAX_CHARS=10):
+            call_command("build_index", "--no-embed", verbosity=0)
+        spans = list(
+            KnowledgeChunk.objects.order_by("ordinal").values_list(
+                "start_line", "end_line"
+            )
+        )
+        self.assertEqual(spans, [(1, 1), (3, 3)])
+
+    def test_a_moved_chunk_refreshes_its_span_without_re_embedding(self):
+        document = KnowledgeDocument.objects.create(
+            kind=KnowledgeDocument.Kind.GITHUB_README,
+            source="o/r",
+            content="aaaa\n\npara two",
+        )
+        with override_settings(RAG_CHUNK_MAX_CHARS=10):
+            call_command("build_index", "--no-embed", verbosity=0)
+            digest = KnowledgeChunk.objects.get(ordinal=1).content_hash
+            # Two blank lines above the second paragraph: its text is untouched, so
+            # only the line span has to move (and no embedding call is needed).
+            document.content = "aaaa\n\n\n\npara two"
+            document.save(update_fields=["content"])
+            call_command("build_index", "--no-embed", verbosity=0)
+
+        moved = KnowledgeChunk.objects.get(ordinal=1)
+        self.assertEqual(moved.content, "para two")
+        self.assertEqual(moved.content_hash, digest)
+        self.assertEqual((moved.start_line, moved.end_line), (5, 5))
+
+    def test_line_range_labels(self):
+        from chat.rag import line_range_label
+
+        self.assertEqual(line_range_label(120, 148), "120-148")
+        self.assertEqual(line_range_label(120, 120), "120")
+        # 0 means "indexed before the spans were tracked": link the file only.
+        self.assertEqual(line_range_label(0, 0), "")
+
+    def test_chunk_title_reads_the_markdown_section(self):
+        from chat.rag import chunk_title
+
+        self.assertEqual(chunk_title("## Deployment\n\nCloud Run deploys."), "Deployment")
+        self.assertEqual(chunk_title("just prose, no heading"), "")
+
+    def test_a_retrieved_chunk_carries_its_citation_metadata(self):
+        from chat.rag import _candidate
+
+        chunk = KnowledgeChunk(
+            document=KnowledgeDocument(
+                kind=KnowledgeDocument.Kind.GITHUB_README,
+                source="o/r",
+                url="https://github.com/o/r/blob/main/README.md",
+            ),
+            ordinal=0,
+            content="## Deployment\n\nCloud Run deploys.",
+            start_line=120,
+            end_line=148,
+        )
+        candidate = _candidate(chunk, 0.87)
+        self.assertEqual(candidate["source"], "o/r")
+        self.assertEqual(candidate["title"], "Deployment")
+        self.assertEqual(candidate["url"], "https://github.com/o/r/blob/main/README.md")
+        self.assertEqual(candidate["lines"], "120-148")
+        self.assertAlmostEqual(candidate["score"], 0.87)
 
     def test_cosine_similarity(self):
         from chat.rag import _cosine
@@ -771,6 +865,145 @@ class InterviewNotificationTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
 
 
+@override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    INTERVIEW_NOTIFY_EMAIL="andrea@example.com",
+    DEFAULT_FROM_EMAIL="BarkAI <noreply@barkai.test>",
+)
+class RetryInterviewNotificationsCommandTests(TestCase):
+    """The recovery command: what is still pending, what is sent, what is not."""
+
+    def setUp(self):
+        mail.outbox = []
+
+    def _pending_request(self, **overrides):
+        """A request whose notification never went out (capture sends nothing)."""
+        payload = {"hr_name": "Mette", "hr_email": "mette@firma.dk"}
+        payload.update(overrides)
+        return capture_interview_request(ChatSession.objects.create(), **payload)
+
+    def test_sends_every_pending_request_and_stamps_it(self):
+        first = self._pending_request()
+        second = self._pending_request(hr_email="jonas@firma.dk")
+
+        out = StringIO()
+        call_command("retry_interview_notifications", stdout=out)
+
+        self.assertEqual(len(mail.outbox), 2)
+        # The notification goes to Andrea; the recruiter's address is in the body.
+        self.assertEqual(
+            sorted(email.to[0] for email in mail.outbox),
+            ["andrea@example.com", "andrea@example.com"],
+        )
+        bodies = "\n".join(email.body for email in mail.outbox)
+        self.assertIn("mette@firma.dk", bodies)
+        self.assertIn("jonas@firma.dk", bodies)
+        self.assertIn("a recruiter requested an interview", mail.outbox[0].subject)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertTrue(first.is_notified)
+        self.assertTrue(second.is_notified)
+        self.assertIn("Done: 2/2 notification(s) sent.", out.getvalue())
+
+    def test_already_notified_requests_are_left_alone(self):
+        mark_notified(self._pending_request())
+
+        out = StringIO()
+        call_command("retry_interview_notifications", stdout=out)
+
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertIn("Nothing pending", out.getvalue())
+
+    def test_requests_without_a_reply_address_are_never_sent(self):
+        # Captured with no email: there is nobody to notify.
+        self._pending_request(hr_email="")
+
+        out = StringIO()
+        call_command("retry_interview_notifications", stdout=out)
+
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertIn("Nothing pending", out.getvalue())
+
+    def test_dry_run_lists_what_would_be_sent_and_keeps_it_pending(self):
+        request_obj = self._pending_request()
+
+        out = StringIO()
+        call_command("retry_interview_notifications", "--dry-run", stdout=out)
+
+        self.assertEqual(len(mail.outbox), 0)
+        request_obj.refresh_from_db()
+        self.assertFalse(request_obj.is_notified)
+        self.assertIn("[dry-run] would notify mette@firma.dk", out.getvalue())
+
+    @override_settings(INTERVIEW_NOTIFY_EMAIL="")
+    def test_disabled_notifications_are_reported_and_stay_pending(self):
+        request_obj = self._pending_request()
+
+        out = StringIO()
+        call_command("retry_interview_notifications", stdout=out)
+
+        self.assertEqual(len(mail.outbox), 0)
+        request_obj.refresh_from_db()
+        self.assertFalse(request_obj.is_notified)
+        self.assertIn("Still pending", out.getvalue())
+        self.assertIn("notifications disabled", out.getvalue())
+        self.assertIn("Done: 0/1 notification(s) sent.", out.getvalue())
+
+    def test_an_smtp_failure_is_reported_with_its_reason(self):
+        request_obj = self._pending_request()
+
+        out = StringIO()
+        with patch(
+            "chat.notifications.send_mail",
+            side_effect=RuntimeError("smtp is down"),
+        ):
+            call_command("retry_interview_notifications", stdout=out)
+
+        request_obj.refresh_from_db()
+        self.assertFalse(request_obj.is_notified)
+        self.assertIn("Still pending", out.getvalue())
+        self.assertIn("smtp is down", out.getvalue())
+        # The reason is recorded so the admin shows why it is still waiting.
+        self.assertIn("smtp is down", request_obj.notification_error)
+
+
+class SendTestEmailCommandTests(TestCase):
+    """The SMTP self-check: it reports the configuration and never fails silently."""
+
+    def setUp(self):
+        mail.outbox = []
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        DEFAULT_FROM_EMAIL="barkley@example.test",
+        INTERVIEW_NOTIFY_EMAIL="andrea@example.test",
+    )
+    def test_reports_the_configuration_and_sends_the_test_message(self):
+        out = StringIO()
+        call_command("send_test_email", "--to", "hr@example.test", stdout=out)
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["hr@example.test"])
+        self.assertEqual(mail.outbox[0].from_email, "barkley@example.test")
+        self.assertIn("BarkAI test email", mail.outbox[0].subject)
+        output = out.getvalue()
+        self.assertIn("Backend: django.core.mail.backends.locmem.EmailBackend", output)
+        self.assertIn("Sent 1 message(s).", output)
+
+        # Without --to the configured interview address is the recipient.
+        call_command("send_test_email", stdout=StringIO())
+        self.assertEqual(len(mail.outbox), 2)
+        self.assertEqual(mail.outbox[1].to, ["andrea@example.test"])
+
+    @override_settings(INTERVIEW_NOTIFY_EMAIL="")
+    def test_without_a_recipient_it_fails_cleanly(self):
+        with self.assertRaisesMessage(
+            CommandError, "No recipient: pass --to or set INTERVIEW_NOTIFY_EMAIL."
+        ):
+            call_command("send_test_email", stdout=StringIO())
+        self.assertEqual(len(mail.outbox), 0)
+
+
 class ChatGuardrailTests(TestCase):
     """Length cap and rate limiting on the public chat endpoint."""
 
@@ -860,11 +1093,32 @@ class JsonModeSalvageTests(TestCase):
         error.response.json.return_value = {"error": {"code": "invalid_api_key"}}
         self.assertEqual(_salvage_failed_generation(error), "")
 
-    def test_sources_lines_are_stripped_from_the_prose(self):
-        from chat.services import _strip_sources_lines
+    def test_the_citation_list_never_stays_in_the_prose(self):
+        # Every shape the model has actually produced: the prompt forbids a
+        # citation list in `reply` and the sanitiser makes sure of it, in both
+        # languages.
+        labels = {"latorreandrea/barkAI", "latorreandrea/fiestapa"}
+        cases = {
+            "Woof!\nSources: [repo/a]\n": "Woof!",
+            "Woof!\nsources: ['latorreandrea/barkAI', 'latorreandrea/fiestapa']": "Woof!",
+            "Woof!\nKilder: latorreandrea/barkAI": "Woof!",
+            "Woof!\nReferencer: profile": "Woof!",
+            "Woof!\n[2, 3]": "Woof!",
+            "Woof!\n- latorreandrea/barkAI\n- latorreandrea/fiestapa": "Woof!",
+            "Woof!\n['latorreandrea/barkAI']": "Woof!",
+        }
+        for prose, expected in cases.items():
+            self.assertEqual(_strip_sources_lines(prose, labels), expected)
 
-        self.assertEqual(_strip_sources_lines("Woof!\nSources: [repo/a]\n"), "Woof!")
-        self.assertEqual(_strip_sources_lines("Woof! No sources here."), "Woof! No sources here.")
+    def test_real_sentences_survive_the_prose_sanitiser(self):
+        labels = {"latorreandrea/barkAI", "latorreandrea/fiestapa"}
+        for prose in (
+            "Woof! No sources here.",
+            "Woof!\n- Andrea built the pipeline end to end.",
+            "Woof!\nSniff, sniff.",
+            "Woof!\nSniff! I used Django, PostgreSQL and Cloud Run.",
+        ):
+            self.assertEqual(_strip_sources_lines(prose, labels), prose)
 
 
 class GoldenSetEvalTests(TestCase):
@@ -936,6 +1190,77 @@ class GoldenSetEvalTests(TestCase):
             [],
         )
 
+    def test_every_case_asserts_the_prose_contract(self):
+        leaked = "Woof!\nSources: ['repo/a']\n- repo/b"
+        joined = " | ".join(format_reasons(leaked))
+        self.assertIn("citation list", joined)
+        self.assertIn("bullet points", joined)
+        self.assertEqual(format_reasons("Woof! Andrea deployed on Cloud Run."), [])
+
+    def test_evaluator_flags_a_leaked_citation_list_without_any_expectation(self):
+        case = {"id": "t", "language": "en", "must_contain": ["django"]}
+        reasons = evaluate_case(
+            case,
+            reply="Woof! He used Django.\n[1, 2]",
+            interview_requested=False,
+            detected_language="en",
+        )
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("prose", reasons[0])
+
+    def test_evaluator_checks_the_citations(self):
+        case = {
+            "id": "t",
+            "language": "en",
+            "cites_any": ["profile"],
+            "cites_something": True,
+        }
+        self.assertEqual(
+            evaluate_case(
+                case,
+                reply="Woof! Sure.",
+                interview_requested=False,
+                detected_language="en",
+                sources=[_citation(label="profile", title="Career profile", lines="")],
+            ),
+            [],
+        )
+        # No citation at all: both citation expectations fail.
+        missing = evaluate_case(
+            case,
+            reply="Woof! Sure.",
+            interview_requested=False,
+            detected_language="en",
+            sources=[],
+        )
+        self.assertEqual(len(missing), 2)
+        # The legacy shape (a bare label per citation) still counts.
+        legacy = evaluate_case(
+            case,
+            reply="Woof! Sure.",
+            interview_requested=False,
+            detected_language="en",
+            sources=["latorreandrea/fiestapa"],
+        )
+        self.assertEqual(len(legacy), 1)
+        self.assertIn("cites: expected one of", legacy[0])
+
+    def test_validation_rejects_a_malformed_citation_expectation(self):
+        problems = validate_golden_set(
+            {
+                "cases": [
+                    {"id": "x", "language": "en", "question": "Q", "cites_any": "profile"},
+                    {"id": "y", "language": "da", "question": "Q", "cites_something": "yes"},
+                ]
+            }
+        )
+        self.assertTrue(
+            any("'cites_any' must be a list of strings" in item for item in problems)
+        )
+        self.assertTrue(
+            any("'cites_something' must be a boolean" in item for item in problems)
+        )
+
     def test_evaluator_reports_a_missing_required_fact(self):
         case = {"id": "t", "language": "en", "must_contain": ["bigquery"]}
         reasons = evaluate_case(
@@ -948,27 +1273,76 @@ class GoldenSetEvalTests(TestCase):
         self.assertIn("missing", reasons[0])
 
 
+_BARKAI_README_URL = "https://github.com/latorreandrea/barkAI/blob/main/README.md"
+
+
+def _passages() -> list[dict]:
+    """The numbered passages a retrieval run hands to the model (see chat.rag)."""
+    return [
+        {
+            "id": 1,
+            "label": "profile",
+            "title": "Andrea Latorre — career profile",
+            "url": "https://example.test/andrea_profile.md",
+            "lines": "",
+        },
+        {
+            "id": 2,
+            "label": "latorreandrea/barkAI",
+            "title": "Deployment",
+            "url": _BARKAI_README_URL,
+            "lines": "120-148",
+        },
+    ]
+
+
+def _citation(**overrides) -> dict:
+    """A stored/API citation: the shape ``_resolve_citations`` returns."""
+    payload = {
+        "label": "latorreandrea/barkAI",
+        "title": "Deployment",
+        "url": _BARKAI_README_URL,
+        "lines": "120-148",
+    }
+    payload.update(overrides)
+    return payload
+
+
 class SourceCitationTests(TestCase):
-    """Citations: the model proposes labels, the server validates them."""
+    """Citations: the model proposes passage numbers, the server resolves them."""
 
-    def test_sanitizer_keeps_only_retrieved_labels(self):
-        allowed = ["latorreandrea/barkAI", "latorreandrea/fiestapa"]
-        kept = _sanitize_sources(
-            ["latorreandrea/barkAI", "latorreandrea/invented", " LATORREANDREA/FIESTAPA "],
-            allowed,
+    def test_numbers_resolve_to_the_retrieved_passages(self):
+        kept = _resolve_citations([2, 1], _passages())
+        self.assertEqual(
+            [item["label"] for item in kept], ["latorreandrea/barkAI", "profile"]
         )
-        # The invented label is dropped, the case/whitespace difference is
-        # normalised, and the canonical spelling of the allowed label is kept.
-        self.assertEqual(kept, ("latorreandrea/barkAI", "latorreandrea/fiestapa"))
+        # The link and the line range come from the index, never from the model.
+        self.assertEqual(kept[0]["url"], _BARKAI_README_URL)
+        self.assertEqual(kept[0]["lines"], "120-148")
+        self.assertEqual(kept[0]["title"], "Deployment")
+        self.assertEqual(kept[1]["lines"], "")
 
-    def test_sanitizer_drops_everything_without_a_retrieved_list(self):
-        self.assertEqual(_sanitize_sources(["latorreandrea/barkAI"], []), ())
-        self.assertEqual(_sanitize_sources("not-a-list", ["repo/a"]), ())
+    def test_invented_numbers_and_duplicates_are_dropped(self):
+        kept = _resolve_citations([2, 99, 2, True, None, "1"], _passages())
+        self.assertEqual(
+            [item["label"] for item in kept], ["latorreandrea/barkAI", "profile"]
+        )
+
+    def test_legacy_labels_still_resolve(self):
+        # The prompt used to ask for labels, and a stored answer may still cite one.
+        kept = _resolve_citations(
+            [" LATORREANDREA/BARKAI#L120-L148 ", "invented/repo"], _passages()
+        )
+        self.assertEqual([item["label"] for item in kept], ["latorreandrea/barkAI"])
+
+    def test_everything_is_dropped_without_a_retrieved_passage(self):
+        self.assertEqual(_resolve_citations([1], []), ())
+        self.assertEqual(_resolve_citations("not-a-list", _passages()), ())
 
     @override_settings(GROQ_API_KEY="test-key")
     @patch(
         "chat.services._knowledge_for_prompt",
-        return_value=("ground truth", ["repo/a"]),
+        return_value=("ground truth", _passages()),
     )
     @patch(
         "chat.services._call_groq",
@@ -977,34 +1351,38 @@ class SourceCitationTests(TestCase):
                 "reply": "Woof! Grounded facts.",
                 "interview_requested": False,
                 "suggest_questions": False,
-                "sources": ["repo/a", "repo/invented"],
+                "sources": [2, 99],
             }
         ),
     )
     def test_invented_citations_never_reach_the_caller(self, _call, _knowledge):
-        result = generate_reply("Tell me about repo a")
-        self.assertEqual(result.sources, ("repo/a",))
+        result = generate_reply("Tell me about barkAI")
+        self.assertEqual(
+            [item["label"] for item in result.sources], ["latorreandrea/barkAI"]
+        )
+        self.assertEqual(result.sources[0]["lines"], "120-148")
 
-    def test_citable_sources_block_lists_the_labels(self):
-        prompt = build_system_prompt("facts", "en", ["repo/a", "repo/b"])
-        self.assertIn("CITABLE SOURCES", prompt)
-        self.assertIn("- repo/a", prompt)
-        self.assertIn("- repo/b", prompt)
+    def test_citable_passages_block_lists_the_numbers(self):
+        prompt = build_system_prompt("facts", "en", _passages())
+        self.assertIn("CITABLE PASSAGES", prompt)
+        self.assertIn("[1] profile · Andrea Latorre — career profile", prompt)
+        self.assertIn("[2] latorreandrea/barkAI · Deployment · lines 120-148", prompt)
 
-    def test_no_sources_prompt_asks_for_an_empty_list(self):
+    def test_no_passages_prompt_asks_for_an_empty_list(self):
         prompt = build_system_prompt("facts", "en", [])
         self.assertIn("none available", prompt)
 
     @override_settings(GROQ_API_KEY="")
     def test_api_returns_and_persists_the_citations(self):
         session_id = uuid4()
+        citation = _citation()
         with patch(
             "chat.api.router.generate_reply",
             return_value=BarkleyResponse(
                 reply="Woof! Grounded answer.",
                 barkley_state="speaking",
                 interview_requested=False,
-                sources=("latorreandrea/barkAI",),
+                sources=(citation,),
             ),
         ):
             response = self.client.post(
@@ -1013,14 +1391,29 @@ class SourceCitationTests(TestCase):
                 content_type="application/json",
             )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["sources"], ["latorreandrea/barkAI"])
+        self.assertEqual(response.json()["sources"], [citation])
 
         session = ChatSession.objects.get(session_id=session_id)
         assistant = session.messages.get(sender=ChatMessage.Sender.ASSISTANT)
-        self.assertEqual(assistant.sources, ["latorreandrea/barkAI"])
+        self.assertEqual(assistant.sources, [citation])
 
         history = self.client.get(f"/api/chat/history/{session_id}").json()
-        self.assertEqual(history["messages"][-1]["sources"], ["latorreandrea/barkAI"])
+        self.assertEqual(history["messages"][-1]["sources"], [citation])
+
+    def test_legacy_label_citations_still_serialize(self):
+        # A row written when a citation was a bare label must still render.
+        session = ChatSession.objects.create()
+        ChatMessage.objects.create(
+            session=session,
+            sender=ChatMessage.Sender.ASSISTANT,
+            content="Woof!",
+            sources=["latorreandrea/barkAI"],
+        )
+        payload = self.client.get(f"/api/chat/history/{session.session_id}").json()
+        self.assertEqual(
+            payload["messages"][0]["sources"],
+            [{"label": "latorreandrea/barkAI", "title": "", "url": "", "lines": ""}],
+        )
 
     def test_user_turns_carry_no_sources(self):
         session = ChatSession.objects.create()

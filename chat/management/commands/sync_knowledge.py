@@ -225,7 +225,9 @@ class Command(BaseCommand):
             kind=KnowledgeDocument.Kind.PROFILE,
             source=PROFILE_SOURCE,
             title="Andrea Latorre — career profile",
-            url="",
+            # Optional: the public URL of the profile file, so a citation that
+            # points at the profile is clickable too (see PROFILE_URL).
+            url=getattr(settings, "PROFILE_URL", ""),
             content=path.read_text(encoding="utf-8"),
         )
 
@@ -245,6 +247,15 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f"  + {source}: created"))
             return "created"
         if existing.content_hash == digest:
+            # The text did not change, but its metadata may have (a renamed
+            # repository, a new PROFILE_URL): refresh it cheaply, keeping the
+            # chunks and their embeddings untouched.
+            if (existing.title, existing.url) != (title, url):
+                existing.title = title
+                existing.url = url
+                existing.save(update_fields=["title", "url", "fetched_at"])
+                self.stdout.write(self.style.WARNING(f"  ~ {source}: metadata updated"))
+                return "updated"
             self.stdout.write(f"  = {source}: unchanged")
             return "unchanged"
         existing.title = title

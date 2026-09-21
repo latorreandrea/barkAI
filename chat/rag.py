@@ -9,14 +9,22 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 
 from django.conf import settings
 from django.db import connection
 
 from chat.embeddings import EmbeddingError, embed_text
 from chat.models import KnowledgeChunk, KnowledgeDocument
+from chat.prompts import passage_description
 
 logger = logging.getLogger(__name__)
+
+# ``## Deployment`` → the section a chunk belongs to, shown in the citation.
+_HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*$", re.MULTILINE)
+
+# The career profile is passage 1 of every prompt (see the builders below).
+PROFILE_PASSAGE_ID = 1
 
 
 def retrieve(
@@ -68,6 +76,37 @@ def _limit_per_source(
     return kept
 
 
+def chunk_title(content: str) -> str:
+    """The markdown section a chunk starts in (empty when it has no heading)."""
+    match = _HEADING_RE.search(content or "")
+    return match.group(1).strip() if match else ""
+
+
+def line_range_label(start_line: int, end_line: int) -> str:
+    """``"120-148"``, ``"120"`` or ``""``: how a citation shows its lines."""
+    if not start_line or not end_line:
+        return ""
+    return f"{start_line}-{end_line}" if end_line != start_line else str(start_line)
+
+
+def _candidate(chunk: KnowledgeChunk, score: float) -> dict:
+    """One retrieval hit, carrying everything a citation needs.
+
+    The URL and the line span come from the index rather than from the model, so
+    a link can never be invented: the model only ever cites the passage number.
+    """
+    document = chunk.document
+    return {
+        "chunk_id": chunk.pk,
+        "content": chunk.content,
+        "source": document.source,
+        "title": chunk_title(chunk.content),
+        "url": document.url or "",
+        "lines": line_range_label(chunk.start_line, chunk.end_line),
+        "score": score,
+    }
+
+
 def retrievable_chunks():
     """Chunks that may take part in the similarity search.
 
@@ -82,13 +121,18 @@ def retrievable_chunks():
     )
 
 
-def profile_context() -> str:
-    """The curated career profile, always sent to the model as ground truth."""
-    document = (
+def profile_document() -> KnowledgeDocument | None:
+    """The curated career profile document, or ``None`` when it is not synced."""
+    return (
         KnowledgeDocument.objects.filter(kind=KnowledgeDocument.Kind.PROFILE)
         .order_by("source")
         .first()
     )
+
+
+def profile_context() -> str:
+    """The curated career profile, always sent to the model as ground truth."""
+    document = profile_document()
     if document is None:
         logger.warning("No career profile synced: run `python manage.py sync_knowledge`.")
         return ""
@@ -96,25 +140,53 @@ def profile_context() -> str:
     return f"### {header}\n{document.content}"
 
 
-def build_retrieved_context_with_sources(query: str) -> tuple[str, list[str]]:
-    """Prompt section plus the labels BarklAI is allowed to cite.
+def build_retrieved_context_with_citations(query: str) -> tuple[str, list[dict]]:
+    """Prompt section plus the numbered passages BarklAI may cite.
 
-    Both come from one call on purpose: embedding is an HTTP request, so a second
-    ``retrieve()`` just to collect the labels would double the cost and the latency.
+    The profile is passage ``1`` (it is always injected) and the retrieved chunks
+    follow, so the model cites integers while the application keeps the URL and
+    the line range of every citation. Both come from a single ``retrieve()`` call
+    on purpose: embedding is an HTTP request, so a second one would only add cost
+    and latency.
     """
     chunks = retrieve(query)
-    profile = profile_context()
-    sections = [profile] if profile else []
-    sections.extend(
-        f"### {chunk['source']} (relevance {chunk['score']:.2f})\n{chunk['content']}"
-        for chunk in chunks
-    )
-    return "\n\n".join(sections), sorted({chunk["source"] for chunk in chunks})
+    sections: list[str] = []
+    citations: list[dict] = []
+
+    document = profile_document()
+    if document is not None:
+        citation = {
+            "id": PROFILE_PASSAGE_ID,
+            "label": document.source,
+            "title": document.title or "Career profile",
+            "url": document.url or "",
+            "lines": "",
+        }
+        citations.append(citation)
+        sections.append(
+            f"[{PROFILE_PASSAGE_ID}] {passage_description(citation)}\n{document.content}"
+        )
+
+    for offset, chunk in enumerate(chunks, start=PROFILE_PASSAGE_ID + 1):
+        citation = {
+            "id": offset,
+            "label": chunk["source"],
+            "title": chunk["title"],
+            "url": chunk["url"],
+            "lines": chunk["lines"],
+        }
+        citations.append(citation)
+        sections.append(
+            f"[{offset}] {passage_description(citation)} "
+            f"(relevance {chunk['score']:.2f})\n{chunk['content']}"
+        )
+
+    return "\n\n".join(sections), citations
 
 
 def build_retrieved_context(query: str) -> str:
     """Prompt section: the career profile plus the most relevant project chunks."""
-    return build_retrieved_context_with_sources(query)[0]
+    return build_retrieved_context_with_citations(query)[0]
 
 
 def _retrieve_postgres(query_vector: list[float], top_k: int, min_score: float) -> list[dict]:
@@ -130,9 +202,7 @@ def _retrieve_postgres(query_vector: list[float], top_k: int, min_score: float) 
     for chunk in rows:
         score = 1.0 - float(chunk.distance)
         if score >= min_score:
-            results.append(
-                {"content": chunk.content, "source": chunk.document.source, "score": score}
-            )
+            results.append(_candidate(chunk, score))
     return results
 
 
@@ -145,7 +215,7 @@ def _retrieve_python(query_vector: list[float], top_k: int, min_score: float) ->
         scored.append((_cosine(query_vector, vector), chunk))
     scored.sort(key=lambda item: item[0], reverse=True)
     return [
-        {"content": chunk.content, "source": chunk.document.source, "score": score}
+        _candidate(chunk, score)
         for score, chunk in scored[: top_k * 4]
         if score >= min_score
     ]

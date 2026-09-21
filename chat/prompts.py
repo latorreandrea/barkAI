@@ -54,15 +54,18 @@ GROUNDING_RULES = (
     "is that Andrea is eligible to work in Denmark."
 )
 
-# Citations: the model may only name labels retrieval actually returned. The
-# allowed list is injected as a "CITABLE SOURCES" block and validated again
-# server-side (see chat/services.py:_sanitize_sources), so a fabricated label
-# can never reach the recruiter.
+# Citations: the model may only cite the numbered passages retrieval actually
+# returned. The allowed numbers travel in a "CITABLE PASSAGES" block and are
+# validated again server-side (see chat/services.py:_resolve_citations), which
+# also attaches the GitHub link and the line range: the model never writes a URL,
+# so it cannot invent one.
 SOURCES_RULES = (
-    'CITATIONS: fill the JSON "sources" array with the exact labels of the '
-    "citable sources your answer relies on. Never invent a label and never cite "
-    "one you did not use; use an empty array when the career profile or the "
-    "conversation was enough. Add no sources text anywhere else in the answer."
+    'CITATIONS: put the NUMBERS of the numbered passages your answer relied on '
+    'in the JSON "sources" array (integers, e.g. [2, 4]). Never invent a number, '
+    "never cite a passage you did not use, and return an empty array when the "
+    "conversation was enough. The links and line numbers are attached by the "
+    "application: write no source names, no URLs and no citation list anywhere in "
+    "the reply text."
 )
 
 # Used when the knowledge base is empty.
@@ -78,7 +81,10 @@ OUTPUT_CONTRACT = (
     '  - "reply": string. Your answer, written in the recruiter\'s language '
     "(see the LANGUAGE rule: a Danish question gets a Danish answer), in "
     "BarklAI's playful dog voice (a short woof / sniff / 🐾 flavoured opening is welcome). Keep it "
-    "concise and recruiter-friendly; use \\n for line breaks.\n"
+    "concise and recruiter-friendly; use \\n only to separate short paragraphs. NEVER use bullet "
+    "points, numbered lists, markdown, code blocks or JSON fragments in this field, and never list, "
+    "name or link your sources here: the citations belong in the sources array of the JSON object "
+    "and the interface renders them.\n"
     '  - "interview_requested": boolean. true when the recruiter wants to '
     "schedule an interview or a call, otherwise false. When you set it to "
     "true, also ask in the same reply for the recruiter's name, email and "
@@ -86,8 +92,8 @@ OUTPUT_CONTRACT = (
     '  - "suggest_questions": boolean. true when the recruiter seems unsure '
     "what to ask (e.g. \"I don't know what to ask\", \"what do you suggest?\"), "
     "so the UI can offer quick-question chips; otherwise false.\n"
-    '  - "sources": array of strings. The exact labels from the CITABLE '
-    "SOURCES list that supported the answer; an empty array when none was used."
+    '  - "sources": array of integers. The numbers of the CITABLE PASSAGES that '
+    'supported the answer; an empty array when none was used.'
 )
 
 
@@ -101,26 +107,42 @@ def language_name(code: str | None) -> str:
     return LANGUAGE_NAMES.get(primary, "English")
 
 
-def citable_sources_block(sources: list[str] | None) -> str:
-    """The exact labels the model may cite, or an explicit "none available"."""
-    if not sources:
+def passage_description(passage: dict) -> str:
+    """One-line description of a citable passage (label + section + lines)."""
+    parts = [str(passage.get("label") or "unknown")]
+    title = str(passage.get("title") or "").strip()
+    if title:
+        parts.append(title)
+    if passage.get("lines"):
+        parts.append(f"lines {passage['lines']}")
+    return " · ".join(parts)
+
+
+def citable_passages_block(passages: list[dict] | None) -> str:
+    """The numbered passages the model may cite, or an explicit "none usable"."""
+    if not passages:
         return (
-            "CITABLE SOURCES: none available for this answer, so return an empty "
+            "CITABLE PASSAGES: none available for this answer, so return an empty "
             '"sources" array.'
         )
-    labels = "\n".join(f"- {label}" for label in sources)
+    listing = "\n".join(
+        f"  [{passage.get('id')}] {passage_description(passage)}"
+        for passage in passages
+    )
     return (
-        'CITABLE SOURCES - the only labels you may put in "sources", spelled '
-        f"exactly as here and never invented:\n{labels}"
+        "CITABLE PASSAGES — the numbered passages in the ground truth above are "
+        "the only evidence you may cite. Put the numbers of the ones your answer "
+        f'used into "sources" (integers):\n{listing}'
     )
 
 
 def build_system_prompt(
-    knowledge: str = "", language: str = "en", sources: list[str] | None = None
+    knowledge: str = "", language: str = "en", passages: list[dict] | None = None
 ) -> str:
     """Compose the system prompt, embedding the knowledge base when present.
 
-    ``sources`` are the knowledge-base labels retrieval actually returned; they
+    ``passages`` are the numbered passages retrieval returned and rendered at the
+    top of the ground truth (see :func:`citable_passages_block`); their numbers
     are the only values allowed in the JSON ``sources`` field.
     """
     parts = [
@@ -136,6 +158,6 @@ def build_system_prompt(
         )
     else:
         parts.append(NO_KNOWLEDGE)
-    parts.append(citable_sources_block(sources))
+    parts.append(citable_passages_block(passages))
     parts.append(OUTPUT_CONTRACT)
     return "\n\n".join(parts)

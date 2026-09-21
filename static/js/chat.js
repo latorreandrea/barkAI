@@ -127,11 +127,27 @@
     var WARM_CLIPS = ["typing", "speaking"];
     var WARM_DELAY_MS = 4000;
 
+    // The visitor is owed the WHOLE take the first time one of these clips takes
+    // the stage: whoever sees "BarklAI is searching…" for the first time should
+    // watch the searching clip play out, instead of it being cut the moment the
+    // reply is ready. Every later play-through is cut as soon as the next clip can
+    // draw — exactly as before.
+    var HOLD_FIRST_FULL_CLIP = ["searching"];
+    // Not a UX cut-off: the clip is always given its full length, plus this grace
+    // second. A background tab pauses the video while timers keep ticking, so
+    // without a deadline a stalled clip could hold the reply back forever.
+    var FULL_CLIP_GRACE_MS = 1000;
+    // Deadline used when the clip's metadata never arrived (broken file, cold
+    // cache): long enough for a slow network, short enough to not look stuck.
+    var FIRST_TAKE_FALLBACK_MS = 20000;
+
     var frontVideo = videos[0] || null; // The element on screen.
     var backVideo = videos[1] || null;  // The element being pre-rolled (may be absent).
     var visibleState = null;            // State of the element on screen.
     var pendingState = null;            // State being pre-rolled behind it.
     var swapTimer = null;
+    var fullClipSeen = {};              // States whose "watch me once" take is over.
+    var heldClip = null;                // {state, deadline} of the hold in progress.
 
     function videoUrl(state) {
         return mediaUrl + state + ".mp4" + (assetVersion ? "?v=" + assetVersion : "");
@@ -206,6 +222,56 @@
             return 0; // Length unknown: there is nothing to wait for.
         }
         return Math.max(0, (video.duration - video.currentTime) * 1000);
+    }
+
+    // True while the clip on screen still has to play through once before the
+    // stage (and BarklAI's answer) may go on: see HOLD_FIRST_FULL_CLIP. The hold
+    // ends on the loop seam — the neutral pose — or on its deadline, which only
+    // triggers when the clip stopped advancing (a background tab pauses video,
+    // not timers).
+    function firstPlayThroughPending() {
+        if (
+            HOLD_FIRST_FULL_CLIP.indexOf(visibleState) === -1 ||
+            fullClipSeen[visibleState]
+        ) {
+            return false;
+        }
+        var video = frontVideo;
+        var duration = video && isFinite(video.duration) ? video.duration : 0;
+        if (!heldClip || heldClip.state !== visibleState) {
+            heldClip = {
+                state: visibleState,
+                deadline: Date.now() + (duration > 0 ? duration * 1000 : FIRST_TAKE_FALLBACK_MS) + FULL_CLIP_GRACE_MS
+            };
+        }
+        if (duration > 0 && duration - video.currentTime <= SEAM_WAIT_MS / 1000) {
+            fullClipSeen[visibleState] = true; // Wrapped: the whole take has been seen.
+            heldClip = null;
+            return false;
+        }
+        if (Date.now() >= heldClip.deadline) {
+            fullClipSeen[visibleState] = true; // Stalled: never block the reply.
+            heldClip = null;
+            return false;
+        }
+        return true;
+    }
+
+    // The same wait, seen from the caller's side: the answer is typed (and the
+    // speaking clip requested) once the first take is over.
+    function whenFirstPlayThroughEnds() {
+        if (!firstPlayThroughPending()) {
+            return Promise.resolve();
+        }
+        return new Promise(function (resolve) {
+            var watcher = window.setInterval(function () {
+                if (firstPlayThroughPending()) {
+                    return;
+                }
+                window.clearInterval(watcher);
+                resolve();
+            }, SWAP_TICK_MS);
+        });
     }
 
     // A clip took the stage: the emoji fallback is no longer needed.
@@ -287,6 +353,9 @@
                 // the swap and the mascot keeps the previous reaction.
                 return;
             }
+            if (firstPlayThroughPending()) {
+                return; // The first take of this clip still has to play out.
+            }
             var seam = seamInMs(frontVideo);
             if (seam > 0 && seam <= SEAM_WAIT_MS) {
                 // The loop is about to reach the pose the new clip starts from:
@@ -329,6 +398,13 @@
             state = "idle";
         }
         currentMascotState = state;
+        // The celebration owns the stage for a while, but not forever: it settles
+        // back into the resting clip on its own (see armCelebrateTimer).
+        if (state === "celebrating") {
+            armCelebrateTimer();
+        } else {
+            clearCelebrateTimer();
+        }
         stageSet(state);
         statusEls.forEach(function (el) {
             el.textContent = STATES[state];
@@ -464,8 +540,53 @@
         return sourcesLabelEl ? sourcesLabelEl.getAttribute("data-label") || "" : "";
     }
 
-    // A discreet "Sources: <label> <label>" line, or null when there is none.
-    // Labels are inserted with textContent, so they cannot inject HTML.
+    // A discreet "Sources: <project> <project>" line, or null when there is none.
+    // The server resolves each citation into {label, title, url, lines}, so the
+    // values are inserted with textContent and can never inject HTML; a citation
+    // with a URL becomes a link that opens the cited lines on GitHub.
+    // What the chip says: the section of the cited file, plus the lines.
+    function citationText(citation) {
+        // The section is the useful label; without one, the source itself.
+        var parts = [citation.title || citation.label || ""];
+        if (citation.lines) {
+            parts.push("L" + citation.lines);
+        }
+        return parts.filter(Boolean).join(" · ");
+    }
+
+    // The full picture on hover, for a chip that had to be shortened.
+    function citationTooltip(citation) {
+        var parts = [];
+        if (citation.label) {
+            parts.push(citation.label);
+        }
+        if (citation.title && citation.title !== citation.label) {
+            parts.push(citation.title);
+        }
+        if (citation.lines) {
+            parts.push("L" + citation.lines);
+        }
+        return parts.join(" · ");
+    }
+
+    function buildCitationChip(citation) {
+        var chip = document.createElement(citation.url ? "a" : "span");
+        chip.className = citation.url
+            ? "sources-chip sources-chip-link"
+            : "sources-chip";
+        if (citation.url) {
+            chip.href = citation.url;
+            chip.target = "_blank";
+            chip.rel = "noopener noreferrer";
+        }
+        chip.textContent = citationText(citation) || citation.label || "";
+        var tooltip = citationTooltip(citation);
+        if (tooltip) {
+            chip.title = tooltip;
+        }
+        return chip;
+    }
+
     function buildSourcesLine(sources) {
         if (!sources || !sources.length) {
             return null;
@@ -477,10 +598,9 @@
         label.textContent = sourcesLabel();
         line.appendChild(label);
         sources.forEach(function (source) {
-            var chip = document.createElement("span");
-            chip.className = "sources-chip";
-            chip.textContent = source;
-            line.appendChild(chip);
+            // Citations stored before they carried links are still plain strings.
+            var citation = typeof source === "string" ? { label: source } : source || {};
+            line.appendChild(buildCitationChip(citation));
         });
         return line;
     }
@@ -807,12 +927,46 @@
         }
     }
 
+    // The visitor has been quiet for a minute: BarklAI offers a few questions AND
+    // settles back into his resting pose. An idle visitor should be looking at an
+    // idle dog, not at a loop of his last reaction — one countdown, one moment.
+    function settleToIdle() {
+        if (formEl.dataset.busy === "true") {
+            return; // Mid-turn: the stage belongs to BarklAI (and to the answer).
+        }
+        if (currentMascotState !== "idle") {
+            setMascotState("idle");
+        }
+    }
+
     // (Re)start the "visitor is idle" countdown.
     function armIdleTimer() {
         clearIdleTimer();
         idleTimer = window.setTimeout(function () {
             showIdleSuggestions(IDLE_HINT);
+            settleToIdle();
         }, IDLE_DELAY_MS);
+    }
+
+    // The celebration is a take of its own, but it hands the stage back after a
+    // minute instead of looping forever (the hand-off form stays available, and any
+    // activity - typing, a new question - cancels this countdown anyway).
+    var CELEBRATE_IDLE_MS = 60000;
+    var celebrateTimer = null;
+
+    function clearCelebrateTimer() {
+        if (celebrateTimer) {
+            window.clearTimeout(celebrateTimer);
+            celebrateTimer = null;
+        }
+    }
+
+    function armCelebrateTimer() {
+        clearCelebrateTimer();
+        celebrateTimer = window.setTimeout(function () {
+            celebrateTimer = null;
+            settleToIdle();
+        }, CELEBRATE_IDLE_MS);
     }
 
     // The visitor has been drafting a message for a long time: offer a hand.
@@ -1136,16 +1290,12 @@
         // 2) BarklAI visibly searches; the bubble shows the progress state as
         //    soon as the previous answer has finished moving up.
         setMascotState("searching");
-        var requestDone = false;
-        var requestPromise = requestReply(text, sentDetails).then(function (data) {
-            requestDone = true;
-            return data;
-        }, function (err) {
-            requestDone = true;
-            throw err;
-        });
+        var requestPromise = requestReply(text, sentDetails);
+        // The progress label stays up for as long as the searching clip owns the
+        // stage — the first search of a visit does that for the whole clip (see
+        // HOLD_FIRST_FULL_CLIP), even when the reply is already waiting.
         flushPromise.then(function () {
-            if (!requestDone) {
+            if (currentMascotState === "searching") {
                 showBubbleProgress(STATES.searching.replace(/…$/, ""));
             }
         });
@@ -1154,6 +1304,9 @@
             var data = await requestPromise;
             rememberContact(data.contact);
             await flushPromise; // Never type the new reply over the old bubble copy.
+            // The first search of a visit was promised its whole clip: BarklAI
+            // starts speaking (the clip and the typed answer) once that take is over.
+            await whenFirstPlayThroughEnds();
             setMascotState(data.interview_requested ? "celebrating" : "speaking");
             await typeBubbleMessage(data.reply, data.sources);
             // The agent decided the recruiter is unsure: offer quick questions.
