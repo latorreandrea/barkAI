@@ -91,7 +91,44 @@ Powered by a Retrieval-Augmented Generation (RAG) pipeline, BarkAI indexes open-
 
 ## UX
 
-> To be populated: user stories, strategy, scope, structure, skeleton and surface for the recruiter chat experience.
+The recruiter chat is one screen and one conversation: no login, no upload, no form to fill before the
+agent is useful. This is the shape it settled into.
+
+**Strategy.** A recruiter decides in minutes whether a profile is worth a second look — and a CV
+cannot show how someone *reasons*. So the site hands BarklAI a real corpus (the curated profile plus
+21 project READMEs) and lets the recruiter interrogate it in their own language, with the evidence
+attached. The agent is the interface; the corpus is the product.
+
+**Scope.** *In:* career questions grounded in the corpus, honest "that is not in my notes" answers,
+English and Danish, clickable citations, an interview hand-off, one-click erasure. *Out:* general
+assistant duties (no poems, no world facts), any claim the corpus cannot support, streaming, push
+notifications and audio — see the [Roadmap](#roadmap).
+
+**Structure** (top to bottom): the compact navbar (brand, EN/DA, *New chat*, GitHub, *Request
+Interview*), the thread that appears only when the visitor expands it, the mascot stage with the live
+comic speech bubble, the sticky composer, and the micro-footer carrying the erasure control.
+
+| User story | Where it lives |
+| --- | --- |
+| "Tell me what he did on project X, in one answer" | retrieval over the READMEs, answered in the bubble |
+| "I do not believe you — show me" | citation chips that open the exact README lines on GitHub |
+| "Does he know Kubernetes?" | an honest refusal, never invented experience |
+| "Kan vi tage den på dansk?" | the whole UI *and* the agent answer in Danish |
+| "Can we book a call?" | the interview flag, the hand-off form, the email to Andrea |
+| "I changed my mind about that form" | the ✕ dismisses it until the visitor asks again |
+| "Delete this conversation" | erasure in the footer, one click, no email required |
+| "It should feel alive, not like a form" | the mascot, the bubble and the clip state machine |
+
+**Skeleton and surface.** The hand-off between bubble and thread is animated (the finished utterance
+slides up into the history while the new one is typed word by word), progress is shown *inside* the
+bubble ("searching" with dots) and the mascot reacts to every state. Visually it is comic pop-art on
+white: ink outlines, hard offset shadows, a hand-drawn dog — no stock illustrations, no dark theme.
+
+**Who it is for, and what counts as success.** Two very different readers share the same conversation:
+the **HR people** screening a profile, and the **technical people** hiring for their own team — one
+wants the shape of a career in plain words, the other wants to know how the retrieval, the pipeline and
+the deployment actually work. Success has exactly one measure: the **calls and emails** that arrive
+because of it.
 
 ### BarklAI — the mascot
 
@@ -105,7 +142,11 @@ his voice (playful, a little cheeky, never robotic) keeps a technical conversati
 - **The name** — *bark* + *AI* → **BarklAI**.
 - **Traits** — amber/orange palette, a comic "pop-art" speech bubble, and one MP4 reaction per state.
 
-<!-- TODO(Andrea): completare con le fattezze reali (look, colori, perché quel design). -->
+**Why a Cocker Spaniel (and why that shirt).** The resemblance was noticed at home, not in a brief:
+coming out of the shower with wet hair, Andrea *looks* like a cocker. The floral shirt is his own — the
+shirts he actually wears — and the breed carries the rest: a dog is one of the strongest symbols there
+is, and a cocker is an **energetic** one, which is the energy the agent should carry about the person
+behind it.
 
 ### How the animations were made
 
@@ -137,8 +178,11 @@ Two details there are load-bearing rather than cosmetic:
   keyframe arrives: the second element pre-rolls the next clip (paused, on its first frame) while the one
   on screen keeps playing, and only replaces it once it can draw.
 
-<!-- TODO(Andrea): descrivere il processo di creazione dei clip (tool/software, prompt o pipeline,
-     tempistiche) e la logica delle "pose" per ogni stato. -->
+**How the clips were produced.** The character was designed with **Gemini** (still artwork) and
+animated with [**zsky.ai**](https://zsky.ai): every state became a short take that starts and ends on
+the same neutral pose, which is what makes the cuts invisible. The exports then had to be cropped to
+the vertical take and re-encoded for the web — that part (the measured `472:720` window, crf 28,
+`-tune animation`, `-an`) is documented in `static/mascot/README.md`.
 
 ### Languages (Danish & English)
 
@@ -156,13 +200,45 @@ Danish question retrieve English project READMEs.
 
 ## Objectives
 
-> To be populated: the project objectives behind the interactive career agent.
+1. **Get Andrea interviews.** The agent exists to turn a recruiter's curiosity into a booked call;
+   everything else serves that — grounded answers, evidence, a frictionless hand-off.
+2. **Show that being out of the sector is not being out of date.** The point of the exercise is to
+   prove to the job market that staying current is a habit rather than a job title: the AI practices
+   live in a real product here, not in a sandbox, and they follow the same best practices Andrea always
+   applied while he *was* working in IT.
+3. **Prove the engineering.** One repository that shows Django, a real RAG pipeline (pgvector +
+   multilingual embeddings), a structured LLM contract, an EN/DA product, production operations
+   (Cloud Run, scheduled jobs, CI) and a privacy posture that holds up.
+4. **Answer 24/7, with nobody in the loop.** No login, no form before the first answer, no "send me
+   your CV".
+5. **Stay honest.** A fluent wrong answer is worse than no answer: the corpus is the only source of
+   facts, and "that is not in my notes" is a first-class reply.
+6. **Be a public showcase.** This README is part of the deliverable — the decisions, the trade-offs
+   and the bugs are documented as they happened ([Bug Log](#bug-log)).
 
 ---
 
 ## Core Principles
 
-> To be populated: core principles and design philosophy.
+* **Grounded beats fluent.** Facts come from the corpus only, and the model is explicitly allowed to
+  answer "that is not in my notes" ([Grounded answers](#grounded-answers)).
+* **The server decides.** The model proposes (language, tone, which passages it used); validation,
+  the links, the line ranges and the interview record belong to the application — never to the model.
+* **Privacy by default.** One anonymous session id, no accounts, no tracking cookies, a 90-day
+  retention window, one-click erasure, and personal identifiers that are never *values*
+  ([Privacy & GDPR](#privacy--gdpr)).
+* **Bilingual or it does not ship.** Every string, every agent answer and every error path exists in
+  English and Danish ([Language parity](#language-parity-en-and-da)).
+* **No runtime surprises.** No CDN, no inline `<style>`/`<script>`, one compiled stylesheet,
+  conservative JS, a single `DATABASE_URL`, settings from the environment only.
+* **Operations are part of the feature.** The health probe, the scheduled jobs, the freshness report,
+  the model fallback and the documented deploy path ship *with* the feature, not after it.
+* **Write it down.** Every non-obvious decision — and every bug that cost more than an hour — ends up
+  in this README with the numbers that justified it.
+* **AI as a collaborator, not an oracle.** Best practices plus a clear idea of the goal are what
+  separate an assistant that covers your gaps, accelerates the work and opens new ground from one that
+  merely produces text. The mascot is the proof: before this project Andrea had never designed or
+  animated one ([How the animations were made](#how-the-animations-were-made)).
 
 ---
 
@@ -584,7 +660,8 @@ The repository is a Django project with a thin surface: `barkai/` holds the sett
 - **Database:** PostgreSQL + **pgvector** via a single `DATABASE_URL` (Neon in dev and prod) — the only supported database configuration. With `DEBUG=True` and no URL the app falls back to zero-config SQLite (handy for a quick look, but no vector search); with `DEBUG=False` it refuses to boot rather than guessing credentials.
 - **Frontend:** Django Templates + Tailwind CSS (compiled with the Tailwind CLI into one minified `barkai.css`; no runtime CDN)
 - **i18n:** Django locales (`locale/da/…`) + `LocaleMiddleware` + `JavaScriptCatalog`, compiled by `scripts/compile_messages.py` (pure Python, no gettext required)
-- **Mascot media:** MP4 reaction clips in `static/mascot/`
+- **Mascot media:** MP4 reaction clips in `static/mascot/` — the character was designed with **Gemini**
+  and animated with [**zsky.ai**](https://zsky.ai) (see [Credits](#credits))
 - **LLM Engine:** Groq API — `qwen/qwen3.8-27b`, via the `groq` SDK in JSON mode (structured output)
 - **Embeddings:** Cloudflare Workers AI — `@cf/baai/bge-m3` (multilingual, 1024-dim) over REST via `httpx`
 - **Knowledge ingestion:** `httpx` against the GitHub REST API (see the `sync_knowledge` command)
@@ -708,7 +785,7 @@ but **blank** falls back to its default, so you only set what you need.
 | `EMAIL_BACKEND` | Delivery backend. Default is the **console** backend (local runs need no SMTP); production sets `django.core.mail.backends.smtp.EmailBackend`. | your choice |
 | `EMAIL_HOST` · `EMAIL_PORT` · `EMAIL_USE_TLS` · `EMAIL_USE_SSL` | SMTP endpoint. Gmail: `smtp.gmail.com`, port `587`, TLS `true`. | your mail provider |
 | `EMAIL_HOST_USER` · `EMAIL_HOST_PASSWORD` | SMTP credentials. For Gmail use a **16-character App Password** (2-Step Verification required), never the account password. | Google Account → *Security → App passwords* |
-| `DEFAULT_FROM_EMAIL` | `From:` header of the notifications. Quote it in `.env` when it carries a display name: `'BarkAI <you@gmail.com>'`. | your choice |
+| `DEFAULT_FROM_EMAIL` | `From:` header of the notifications. Quote it in `.env` (a shell would read `<` as a redirect, and `source` strips the quotes) — **but paste the bare value into the Cloud Run console**: a literal quote there makes `send_mail` fail with `Invalid address; only '…' could be parsed from "'…'"`. | your choice |
 | `EMAIL_TIMEOUT` | Seconds before a mail send is abandoned (default `10`), so a dead SMTP server can never hang a chat request. | your choice |
 | `SITE_BASE_URL` | Public base URL used to build the admin deep link inside the notification (blank = no link). | your deployment URL |
 | `CHAT_RATE_LIMIT_PER_SESSION` | Messages allowed per session within the window (default `20`; `0` disables the check). | your choice |
@@ -1361,7 +1438,29 @@ Because these are strictly necessary, no cookie banner is required; they must st
 
 ## SEO
 
-> To be populated: `sitemap.xml`, `robots.txt`, Open Graph / Twitter Card metadata. A base `<meta name="description">` and `<meta name="keywords">` are already emitted by `templates/base.html`.
+What exists today (checkable in this repo) and what is still missing — a checklist, not a claim:
+
+| Item | Status |
+| --- | --- |
+| `<title>` per page, `<meta name="description">` and `keywords` | ✅ `templates/base.html` |
+| `lang` from the active language, `viewport`, asset-free inline favicon | ✅ |
+| `{% block meta %}` per page, ready for Open Graph / Twitter tags | ✅ (empty today) |
+| Human-readable URLs (`/`, `/privacy/`), API docs at `/api/docs` | ✅ |
+| `sitemap.xml` | ❌ missing — `django.contrib.sitemaps` + `SITE_BASE_URL` would cover it |
+| `robots.txt` | ❌ missing — and it must keep `/admin/` and `/api/` out of the index |
+| Open Graph / Twitter Card (`og:title`, `og:description`, `og:image`) | ❌ missing: a shared link gets no image and no rich card (platforms fall back to `<title>` + description), which is the one page where the dog should show up |
+| `canonical` link | ❌ missing (harmless today: one host, no aliases) |
+| Structured data (`Person` / `ProfilePage` JSON-LD) | ❌ missing — probably the highest-value item for a recruiter-facing profile |
+
+The Open Graph image is the interesting one: the mascot stills are already 472x720, so a 1200x630
+social card has to be produced once — the pipeline that made the clips is documented in
+`static/mascot/README.md`.
+
+**Deliberately not indexed (for now).** The project has no domain of its own, and it is not meant to be
+easy to find: it is being put in front of **people in the field** — the ones who actually hire — rather
+than in front of a crawler. The missing items above are therefore a decision, not an oversight; if
+anything, the honest version of that stance is a `robots.txt` that disallows everything. Opening the
+site up (a custom domain, a `canonical` host, the Open Graph card) is a deliberate later step.
 
 ---
 
@@ -1378,13 +1477,36 @@ Because these are strictly necessary, no cookie banner is required; they must st
 
 ## Troubleshooting
 
-> To be populated: common issues and their fixes.
+Every row below cost real time to find. The full stories — symptom, root cause, fix, dates — are in
+the [Bug Log](#bug-log); this is the fast version.
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The container never starts: `sh: 1: exec: gunicorn: not found` | `pip install --target` puts console scripts outside `PATH` (B-006) | the image runs `python -m gunicorn`, and the build ends with a `--check-config` smoke test |
+| A fresh tag cannot be deployed: `Image '…:e6a55cc' not found` | `images:` publishes *after* the build, while the deploy step runs *inside* it (B-007) | `docker push` happens in the build step |
+| The agent answers in English to a Danish question | the JSON contract used to demand an English `reply` (B-001) | `LANGUAGE_RULES` + the one-shot language guard (one retry, never a loop) |
+| The recruiter gets "I lost the scent of my Groq brain" | `400 json_validate_failed` was treated as a total failure (B-005) | the refused prose is salvaged instead of dropped |
+| A bullet list or a `Sources: …` line appears in an answer | the model pastes its citation list into the prose (B-009) | `_strip_sources_lines()` runs on every path, and the golden set fails any reply that breaks the prose contract |
+| The dog shows black bars or a grey hairline | 1280x720 exports of a 472x720 take (B-008) | re-encoded at the content ratio; `472:720` box + 1 px white fades as a safety net |
+| Nothing changes after a CSS/JS/clip update | WhiteNoise serves static files with a one-year `max-age` | every asset URL carries `?v={{ ASSET_VERSION }}` — bump the assets, never hand-edit the version |
+| Retrieval finds nothing and the index looks empty | you are on SQLite: no pgvector, and the Python fallback scans an empty test database | use the real `DATABASE_URL`; `python manage.py knowledge_status` reports unembedded chunks |
+| The daily chain reports a healthy run but the corpus is stale | the Cloud Run **job** does not inherit the service's environment, so `GITHUB_USERNAME` is missing | set the variables on the job too — the chain prints a warning for exactly this case |
+| No interview email arrives | `INTERVIEW_NOTIFY_EMAIL` blank, or SMTP misconfigured | `python manage.py send_test_email --to you@example.com`, then `retry_interview_notifications` |
+| The log says `Interview notification failed: Invalid address; only 'BarkAI <…>' could be parsed from "'BarkAI <…>'"` | `DEFAULT_FROM_EMAIL` carries **literal quotes** in the container's environment: `.env` needs them (a shell would read `<` as a redirect, and `source` strips them) but the Cloud Run console stores the value exactly as typed | remove the quotes on **both** the service and the job (`BarkAI <you@gmail.com>`), then `python manage.py retry_interview_notifications` — the request was stored, so nothing is lost |
+| `GET /healthz` publicly answers a Google-branded 404 | the request never reaches the app (platform/routing layer); the platform probe talks to the container directly | open item: worth investigating so the public URL matches what the README promises |
+| The quick-question nudge — or the *History* button — is cut off, or covers the bubble, on a phone | the bubble packs to the bottom (`justify-end`) and grows upwards out of `main`, which is `overflow: hidden`; with `flex-end` the surplus ends up *above* the box, where nothing can scroll to it | viewport-aware caps (`min(8rem, 26svh)`, `min(14rem, 32svh)`), `justify-content: safe end` so the surplus scrolls, and the mascot yields room (`max-h-[30svh]` below `sm:`) |
+| Citation links point a few lines away from the claim | the index stores each chunk's line span, so editing a document shifts every later line until the corpus is re-synced | `python manage.py sync_knowledge && python manage.py build_index` (the daily chain does it too). Remember the READMEs are fetched from **GitHub**, so a local edit only lands after a push |
 
 ---
 
 ## Credits
 
-> To be populated. The BarklAI reaction MP4s are generated footage (see `static/mascot/README.md`) and the favicon is an inline dog-emoji SVG — both will be credited or replaced when the final assets land.
+* **BarklAI's artwork** — the mascot character was designed with **Gemini** and animated with
+  [**zsky.ai**](https://zsky.ai); the resulting MP4s are the reaction clips in `static/mascot/`, whose
+  crop, encoding and two-element player are documented in `static/mascot/README.md`.
+* **Everything else** — Django, Django Ninja, Tailwind CSS, Groq and Cloudflare are listed with the
+  role each one plays in [Technology Stack](#technology-stack); the favicon is still an inline
+  dog-emoji SVG (no extra request), and it will be replaced by a designed icon when one exists.
 
 ---
 

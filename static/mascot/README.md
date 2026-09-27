@@ -4,6 +4,10 @@ This folder holds the MP4 reaction clips played by the Web UI. The filenames
 are contractual: `chat/templates/chat/index.html` switches the `<video>` src
 to `/static/mascot/<state>.mp4` based on the BarklAI state returned by the API.
 
+The artwork was produced outside the app: the character was designed with **Gemini** and animated with
+[**zsky.ai**](https://zsky.ai). Everything below is about the files that came out of that — their crop,
+their encoding and the player that swaps them.
+
 | File                | When it plays                                      |
 |---------------------|----------------------------------------------------|
 | `idle.mp4`          | BarklAI resting: nothing to do — including after a minute without activity |
