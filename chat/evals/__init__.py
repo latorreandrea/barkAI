@@ -14,9 +14,13 @@ Matching is case-insensitive. The expectation fields are:
 
 * ``must_contain``     — every string must appear in the reply;
 * ``must_contain_any`` — at least one of the alternatives must appear;
-* ``must_not_contain`` — none may appear. Use it only for claims that must never
-  be made (personal identifiers, invented technologies), **never** for a word the
-  answer legitimately mentions while denying it;
+* ``must_not_contain`` — none of these strings may appear. Use it only for claims that must never be
+  made (invented technologies, off-topic content), **never** for a word the answer legitimately
+  mentions while denying it;
+* ``must_not_match``   — none of these regular expressions (case-insensitive) may match the reply.
+  This is how a *value* is protected rather than a word: the CPR-shaped ``\\b\\d{6}-\\d{4}\\b`` must
+  never show up, while asking about "his CPR number" and answering "that is not mine to share" is
+  perfectly fine (see the profile rule);
 * ``cites_any``        — at least one of these labels must be cited by the reply
   (see ``sources`` in :func:`evaluate_case`);
 * ``cites_something``  — ``true`` requires at least one citation, ``false``
@@ -50,6 +54,7 @@ _EXPECTATION_FIELDS = (
     "must_contain",
     "must_contain_any",
     "must_not_contain",
+    "must_not_match",
     "cites_any",
 )
 
@@ -152,6 +157,14 @@ def validate_golden_set(data: dict) -> list[str]:
             ):
                 problems.append(f"{where}: {field!r} must be a list of strings")
 
+        for pattern in case.get("must_not_match", []):
+            try:
+                re.compile(pattern)
+            except re.error as exc:  # a broken regex must not crash the run
+                problems.append(
+                    f"{where}: 'must_not_match' pattern {pattern!r} is invalid ({exc})"
+                )
+
         if "cites_something" in case and not isinstance(
             case["cites_something"], bool
         ):
@@ -211,6 +224,10 @@ def evaluate_case(
     for banned in case.get("must_not_contain", []):
         if banned.lower() in text:
             reasons.append(f"forbidden {banned!r}")
+
+    for pattern in case.get("must_not_match", []):
+        if re.search(pattern, reply or "", re.IGNORECASE):
+            reasons.append(f"forbidden pattern {pattern!r}")
 
     if "interview_requested" in case and bool(case["interview_requested"]) != bool(
         interview_requested

@@ -147,4 +147,6 @@ Bodyweight training (focus and discipline) · scale modeling (attention to detai
 - **LinkedIn:** https://www.linkedin.com/in/andrealatorre93
 - **GitHub:** https://github.com/latorreandrea
 - **Phone:** +45 71890426 — share **only if the person explicitly asks for it**.
-- Never share personal identifiers (e.g. CPR number): they are not stored anywhere.
+- **CPR:** Andrea has one. Confirm that this detail exists, **never its value** — the number is not
+  stored here and is never shared. The home address works the same way: its existence may be
+  acknowledged, its value never.

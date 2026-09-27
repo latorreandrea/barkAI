@@ -1392,6 +1392,54 @@ class GoldenSetEvalTests(TestCase):
             any("'cites_something' must be a boolean" in item for item in problems)
         )
 
+    def test_evaluator_guards_a_value_with_a_pattern(self):
+        # Naming the detail is fine now: the *value* is what must never appear,
+        # and a literal `must_not_contain` cannot express that (a value has many
+        # spellings).
+        case = {
+            "id": "t",
+            "language": "en",
+            "must_contain_any": ["share", "stored"],
+            "must_not_match": [r"\b\d{6}-\d{4}\b"],
+        }
+        self.assertEqual(
+            evaluate_case(
+                case,
+                reply="He has a CPR number, but that is not mine to share.",
+                interview_requested=False,
+                detected_language="en",
+            ),
+            [],
+        )
+        reasons = evaluate_case(
+            case,
+            reply="Sure, it is 010190-1234 — keep it quiet though.",
+            interview_requested=False,
+            detected_language="en",
+        )
+        self.assertTrue(any("forbidden pattern" in reason for reason in reasons), reasons)
+
+    def test_validation_rejects_a_broken_pattern(self):
+        problems = validate_golden_set(
+            {
+                "cases": [
+                    {
+                        "id": "x",
+                        "language": "en",
+                        "question": "Q",
+                        "must_not_match": ["[unclosed"],
+                    },
+                    {
+                        "id": "y",
+                        "language": "da",
+                        "question": "Q",
+                        "interview_requested": False,
+                    },
+                ]
+            }
+        )
+        self.assertTrue(any("is invalid" in item for item in problems), problems)
+
     def test_evaluator_reports_a_missing_required_fact(self):
         case = {"id": "t", "language": "en", "must_contain": ["bigquery"]}
         reasons = evaluate_case(
