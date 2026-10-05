@@ -54,10 +54,12 @@ FALLBACK_INTERVIEW = (
 
 # Words that strongly suggest the recruiter wants to book an interview. The live
 # model decides this itself; the offline fallback and the API's re-arm signal for
-# the hand-off form use these heuristics. Both languages are covered, otherwise a
-# Danish recruiter would never be flagged while Groq is unreachable — and see
-# ``mentions_interview`` below: the lists are merged, so an English hint (``zoom``)
-# also matches inside a Danish sentence.
+# the hand-off form use these heuristics. English, Danish *and* Italian are covered:
+# the interface ships in EN/DA, but the recruiter's message arrives in their own
+# language, and without the Italian hints a "vorrei fissare un colloquio" matched
+# nothing while Groq was unreachable. See ``mentions_interview`` below: the lists
+# are merged, so an English hint (``zoom``) also matches inside a Danish or an
+# Italian sentence — and an Italian one (``call``) inside an English sentence.
 _EN_INTERVIEW_HINTS = (
     "interview",
     "meeting",
@@ -89,7 +91,24 @@ _DA_INTERVIEW_HINTS = (
     "tale med",
     "få fat i",
 )
-_INTERVIEW_HINTS = _EN_INTERVIEW_HINTS + _DA_INTERVIEW_HINTS
+_IT_INTERVIEW_HINTS = (
+    "colloquio",
+    "candidatura",
+    "candidarmi",
+    "assunzione",
+    "assumere",
+    "incontro",
+    "appuntamento",
+    "chiamata",
+    "chiamarmi",
+    "richiamare",
+    "parlare con",
+    "contattare",
+    "contatto",
+    "disponibilità",
+    "vederci",
+)
+_INTERVIEW_HINTS = _EN_INTERVIEW_HINTS + _DA_INTERVIEW_HINTS + _IT_INTERVIEW_HINTS
 
 # --- Language detection ---------------------------------------------------
 # Deliberately tiny and dependency-free: enough to catch the "Danish question,
@@ -233,10 +252,11 @@ def mentions_interview(text: str) -> bool:
     """Public door to the offline heuristic above.
 
     The API uses it as a *deterministic* backstop for the hand-off form: a
-    request the model failed to flag — in either language — still counts when the
-    message itself says it. It never replaces the model's judgement for the
-    interview record or the notification (a keyword is not evidence enough to
-    email anyone), it only decides whether the form may come back.
+    request the model failed to flag — in any of the languages the hints cover —
+    still counts when the message itself says it. It never replaces the model's
+    judgement for the interview record or the notification (a keyword is not
+    evidence enough to email anyone), it only decides whether the form may come
+    back.
     """
     return _mentions_interview(text)
 

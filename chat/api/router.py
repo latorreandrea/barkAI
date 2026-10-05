@@ -169,10 +169,17 @@ def send_message(request, payload: SendIn) -> BarkleyOut:
         sources=list(result.sources),
     )
 
-    # 5) Flag the session when an interview was requested; bump last_active.
-    if result.interview_requested:
-        # Record the request as an event, then notify Andrea as soon as we have
-        # an email for the recruiter (the hand-off form fills it in afterwards).
+    # 5) Record the interview request and notify Andrea; bump last_active.
+    #
+    #    The capture runs on a fresh flag *and* on every later turn of a session
+    #    that already carries one. The model's flag only describes this turn, and
+    #    recruiters routinely answer "sure, my address is …" one message later
+    #    without the model raising the flag again — gating on this turn alone
+    #    silently dropped those addresses: they landed on the session, and nobody
+    #    was ever notified. Re-running is safe: the capture updates the pending
+    #    row in place, and `notify_interview_requested` never re-sends a request
+    #    it has already sent (it is stamped with `notified_at`).
+    if result.interview_requested or session.interview_requested:
         interview_request = capture_interview_request(
             session,
             hr_name=payload.hr_name,

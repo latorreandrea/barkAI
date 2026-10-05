@@ -679,6 +679,15 @@ class LanguageDetectionTests(TestCase):
         self.assertIn("Danish", prompt)
         self.assertNotIn("Your answer, in English", prompt)
 
+    def test_the_contract_forbids_promising_a_forwarded_request(self):
+        # The model used to announce "Andrea will get back to you" the moment it
+        # flagged the intent — before any address existed, so nothing had been
+        # sent and nobody knew to follow up. The contract now forbids announcing a
+        # forward it cannot make; the interface confirms the hand-off instead.
+        prompt = build_system_prompt("some knowledge", "en")
+        self.assertIn("NEVER claim", prompt)
+        self.assertIn("forwarded", prompt)
+
 
 class LanguageGuardTests(TestCase):
     """A Danish question must not come back in English (the v0.3 regression)."""
@@ -910,6 +919,69 @@ class InterviewNotificationTests(TestCase):
         self.assertEqual(session.interview_requests.first().hr_name, "Mette")
         self.assertEqual(len(mail.outbox), 1)
 
+    def _send_turn(self, session_id, message, **reply):
+        """POST one chat turn with the agent stubbed (no network, no heuristics)."""
+        payload = {
+            "reply": "Woof! Sure.",
+            "barkley_state": "speaking",
+            "interview_requested": False,
+        }
+        payload.update(reply)
+        with patch(
+            "chat.api.router.generate_reply",
+            return_value=BarkleyResponse(**payload),
+        ):
+            response = self.client.post(
+                "/api/chat/send",
+                data=json.dumps({"session_id": str(session_id), "message": message}),
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_an_address_typed_on_a_later_turn_still_notifies(self):
+        # The model flags the interview; the recruiter answers with the address
+        # one message later, and the model does not raise the flag again for a
+        # bare "sure, my email is …". Gating the capture on *this* turn's flag
+        # swallowed that address: it reached the session, no InterviewRequest was
+        # ever notified, and the recruiter was still promised a follow-up.
+        session_id = uuid4()
+        self._send_turn(
+            session_id,
+            "I would like to schedule an interview with Andrea.",
+            interview_requested=True,
+        )
+        self.assertEqual(len(mail.outbox), 0)  # flagged, but nowhere to reply yet
+
+        self._send_turn(session_id, "Sure — mette@firma.dk")
+
+        self.assertEqual(len(mail.outbox), 1)
+        request_obj = InterviewRequest.objects.get(session__session_id=session_id)
+        self.assertEqual(request_obj.hr_email, "mette@firma.dk")
+        self.assertTrue(request_obj.is_notified)
+        self.assertIn("mette@firma.dk", mail.outbox[0].body)
+        # The turn that only carried the address must not replace the message
+        # that actually triggered the request: the notification quotes it.
+        self.assertEqual(
+            request_obj.message, "I would like to schedule an interview with Andrea."
+        )
+
+    def test_a_later_turn_without_new_details_never_notifies_twice(self):
+        session_id = uuid4()
+        self._send_turn(
+            session_id,
+            "Can we schedule a call? Reach me at mette@firma.dk",
+            interview_requested=True,
+        )
+        self.assertEqual(len(mail.outbox), 1)
+
+        # Every later turn re-runs the capture now; the already-notified row is
+        # reused, so Andrea hears about the request exactly once.
+        self._send_turn(session_id, "Thanks! What is Andrea working on right now?")
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(InterviewRequest.objects.count(), 1)
+
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
 class InterviewIntentTests(TestCase):
@@ -918,8 +990,9 @@ class InterviewIntentTests(TestCase):
     The API answers with a **per-turn** `interview_intent` (the model's flag for
     this message, or the message itself asking for an interview in plain words),
     while `interview_requested` stays the sticky session flag that drives the
-    notification. The keyword backstop is what makes the form reliable in both
-    languages even when the model misses the phrasing.
+    notification. The keyword backstop is what makes the form reliable in every
+    language the hints cover — English, Danish and Italian — even when the model
+    misses the phrasing.
     """
 
     SEND_URL = "/api/chat/send"
@@ -968,9 +1041,27 @@ class InterviewIntentTests(TestCase):
             "Hvad laver BarkAI egentlig?",
             "Which Google Cloud services has Andrea used?",
             "Tell me about the RAG pipeline.",
+            "Quali progetti ha realizzato Andrea?",
+            "Puoi parlarmi della sua esperienza con Django?",
+            "Che tipo di posizione cerca BarkAI?",
         ]
         for message in quiet:
             self.assertFalse(mentions_interview(message), message)
+
+    def test_the_heuristic_reads_italian_too(self):
+        # The interface ships in EN/DA, but the recruiter writes in their own
+        # language: "vorrei fissare un colloquio" matched nothing, so neither the
+        # hand-off form nor the offline flag ever fired for an Italian visitor.
+        asked = [
+            "Vorrei fissare un colloquio con Andrea la prossima settimana.",
+            "Possiamo organizzare un incontro?",
+            "Come posso contattare Andrea per una candidatura?",
+            "Saresti disponibile per una chiamata?",
+            "Ti va se ci vediamo per parlare con Andrea della posizione?",
+            "Avete un appuntamento libero in settimana?",
+        ]
+        for message in asked:
+            self.assertTrue(mentions_interview(message), message)
 
     def test_a_danish_request_arms_the_form_when_the_model_misses_it(self):
         # The agent said "no interview" — the message says otherwise, and the
@@ -994,6 +1085,12 @@ class InterviewIntentTests(TestCase):
             "Hello", barkley_state="celebrating", interview_requested=True
         )
         self.assertTrue(payload["interview_intent"])
+
+    def test_an_italian_request_arms_the_form_when_the_model_misses_it(self):
+        payload = self._send("Vorrei fissare un colloquio con Andrea.")
+        self.assertTrue(payload["interview_intent"])
+        # The session flag stays the model's call: nothing was captured.
+        self.assertFalse(payload["interview_requested"])
 
 
 @override_settings(

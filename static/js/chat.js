@@ -1357,7 +1357,10 @@
             }
             if (data.interview_requested) {
                 // Hand-off: keep asking for the details if we still have no way
-                // to reply, or confirm the moment they are on their way.
+                // to reply, or confirm the moment they are on their way. When the
+                // address arrived in the chat, revealContactForm() shows it back
+                // prefilled ("Confirm my details") — the one-click way to correct
+                // an address the server picked out of the message.
                 if (sentDetails.hr_email) {
                     showContactSaved();
                 } else {
@@ -1421,6 +1424,8 @@
 
             // Returning to a session where an interview was requested: make sure
             // the hand-off form (or its confirmation) is in front of the recruiter.
+            // The form comes back prefilled with whatever the conversation knows,
+            // so a known address is an approval click, not a retyping exercise.
             if (data.interview_requested) {
                 revealContactForm();
             }

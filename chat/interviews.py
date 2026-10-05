@@ -11,7 +11,11 @@ Capture rule (deliberately simple and predictable):
 * an already-notified request is reused while the email is unchanged (or still
   unknown), so a repeated ``/send`` cannot re-notify Andrea;
 * a genuinely **different** email is a new event row — the recruiter corrected
-  their address and Andrea must hear about it.
+  their address and Andrea must hear about it;
+* the triggering ``message`` is written **once** — by the first turn that captured
+  the request. A later turn usually only carries the address, and overwriting the
+  context the notification quotes with it would leave Andrea with a bare email
+  instead of the sentence that asked for the interview.
 
 The ``hr_*`` columns on ``ChatSession`` are refreshed too: they are the
 denormalised "latest contact" cache used by the admin list and its search box.
@@ -67,7 +71,9 @@ def capture_interview_request(
         request_obj.hr_email = hr_email
     if company_name:
         request_obj.company_name = company_name[:160]
-    if message:
+    if message and not request_obj.message:
+        # First message wins (see the capture rule above): the notification quotes
+        # it, and the turn that only carries the address is not the trigger.
         request_obj.message = message[:_MESSAGE_MAX_CHARS]
     if language:
         request_obj.language = language[:8]

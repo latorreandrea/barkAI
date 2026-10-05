@@ -95,7 +95,11 @@ OUTPUT_CONTRACT = (
     '  - "interview_requested": boolean. true when the recruiter wants to '
     "schedule an interview or a call, otherwise false. When you set it to "
     "true, also ask in the same reply for the recruiter's name, email and "
-    "company, so Andrea can follow up with them.\n"
+    "company, so Andrea can follow up with them. "
+    "NEVER claim that the details have already been forwarded, sent or "
+    "shared with Andrea: the request only reaches him once an address is "
+    "on file, and the interface confirms the hand-off itself. Ask for the "
+    "details rather than announcing that they are on their way.\n"
     '  - "suggest_questions": boolean. true when the recruiter seems unsure '
     "what to ask (e.g. \"I don't know what to ask\", \"what do you suggest?\"), "
     "so the UI can offer quick-question chips; otherwise false.\n"
