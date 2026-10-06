@@ -88,8 +88,11 @@ OUTPUT_CONTRACT = (
     '  - "reply": string. Your answer, written in the recruiter\'s language '
     "(see the LANGUAGE rule: a Danish question gets a Danish answer), in "
     "BarklAI's playful dog voice (a short woof / sniff / 🐾 flavoured opening is welcome). Keep it "
-    "concise and recruiter-friendly; use \\n only to separate short paragraphs. NEVER use bullet "
-    "points, numbered lists, markdown, code blocks or JSON fragments in this field, and never list, "
+    "concise and recruiter-friendly; use \\n only to separate short paragraphs. You MAY highlight a "
+    "few KEY CONCEPTS (a technology, a role, a number) by wrapping each in double asterisks, like "
+    "**Django** — the interface renders that as bold. Apart from that single bit of emphasis, use no "
+    "other formatting at all: no bullet points, no numbered lists, no headings, no code blocks and no "
+    "other markdown or JSON fragments in this field, and never list, "
     "name or link your sources here: the citations belong in the sources array of the JSON object "
     "and the interface renders them.\n"
     '  - "interview_requested": boolean. true when the recruiter wants to '

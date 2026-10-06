@@ -87,6 +87,30 @@ class IndexViewTests(TestCase):
         # `safe end` is what makes the surplus scrollable instead of unreachable.
         self.assertIn("justify-content: safe end", css)
 
+    def test_the_reply_types_one_character_at_a_time(self):
+        # The bubble used to print a word at a time, far too fast to read on a
+        # phone. It now reveals a single character per tick at a readable pace, can
+        # be finished early by a tap, and prints in one shot under reduced motion.
+        js = (settings.BASE_DIR / "static" / "js" / "chat.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("var CHAR_MS = 35;", js)
+        self.assertIn("is-typing", js)
+        self.assertIn("prefers-reduced-motion: reduce", js)
+        # The bold inside a reply is built from text nodes + <strong>, never HTML.
+        self.assertIn("function parseRichSegments", js)
+        self.assertIn("function buildRichFragment", js)
+        self.assertNotIn(".innerHTML", js)
+
+    def test_the_bubble_caret_and_bold_live_in_the_stylesheet(self):
+        css = (settings.BASE_DIR / "static" / "css" / "chat.css").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("#speech-bubble-text.is-typing::after", css)
+        self.assertIn("@keyframes caretBlink", css)
+        self.assertIn("#speech-bubble-text strong", css)
+        self.assertIn("#message-list strong", css)
+
     def test_the_hand_off_form_can_be_dismissed(self):
         # The ✕ must not submit the form: a bare <button> inside a <form> does,
         # which would save the (empty) details on a dismissal.
@@ -687,6 +711,17 @@ class LanguageDetectionTests(TestCase):
         prompt = build_system_prompt("some knowledge", "en")
         self.assertIn("NEVER claim", prompt)
         self.assertIn("forwarded", prompt)
+
+    def test_the_contract_allows_only_inline_bold(self):
+        # The reply used to ban every trace of markdown. It now permits exactly one
+        # touch of it — **key concepts** — which the interface renders as bold, and
+        # keeps everything heavier (lists, headings, code) forbidden.
+        prompt = build_system_prompt("some knowledge", "en")
+        self.assertIn("double asterisks", prompt)
+        self.assertIn("**Django**", prompt)
+        self.assertIn("no bullet points", prompt)
+        self.assertIn("no headings", prompt)
+        self.assertNotIn("NEVER use bullet", prompt)
 
 
 class LanguageGuardTests(TestCase):
@@ -1348,6 +1383,19 @@ class JsonModeSalvageTests(TestCase):
         ):
             self.assertEqual(_strip_sources_lines(prose, labels), prose)
 
+    def test_inline_bold_survives_the_prose_sanitiser(self):
+        # The agent may wrap a key concept in **double asterisks** (the interface
+        # renders that as bold). That is neither a bullet point nor a citation
+        # list, so the sanitiser has to leave it exactly as written, in any line
+        # position and in both languages.
+        labels = {"latorreandrea/barkAI"}
+        for prose in (
+            "Woof! Andrea's core stack is **Django** and **PostgreSQL**.",
+            "Voff! Han byggede **barkAI** på Cloud Run.\n**Django** er hans hovedværktøj.",
+            "Woof! He shipped **three** production services.",
+        ):
+            self.assertEqual(_strip_sources_lines(prose, labels), prose)
+
 
 class GoldenSetEvalTests(TestCase):
     """The golden-set file and its evaluator: offline, no model calls."""
@@ -1424,6 +1472,17 @@ class GoldenSetEvalTests(TestCase):
         self.assertIn("citation list", joined)
         self.assertIn("bullet points", joined)
         self.assertEqual(format_reasons("Woof! Andrea deployed on Cloud Run."), [])
+
+    def test_inline_bold_is_not_a_formatting_violation(self):
+        # The prose contract forbids lists and leaked citations, not the single
+        # piece of emphasis the reply is now allowed to carry: **bold** must pass.
+        self.assertEqual(
+            format_reasons("Woof! Andrea built **barkAI** on Cloud Run."), []
+        )
+        self.assertEqual(
+            format_reasons("Woof! His core stack is **Django** and **PostgreSQL**."),
+            [],
+        )
 
     def test_evaluator_flags_a_leaked_citation_list_without_any_expectation(self):
         case = {"id": "t", "language": "en", "must_contain": ["django"]}

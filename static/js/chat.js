@@ -512,6 +512,19 @@
     // progress labels and greetings).
     var activeBubbleSources = [];
     var typeTimer = null;
+    // Set while a reply is being revealed: calling it prints the rest of the
+    // message at once. Used by the tap-to-skip handler and reduced motion.
+    var typingSkip = null;
+
+    // Reveal pace, tuned to be *read*, not skipped: one character every CHAR_MS
+    // (~28 chars/s). Long answers compress down to CHAR_MS_MIN so they cannot
+    // drag on, and very short ones stretch to TYPING_MIN_TOTAL_MS so a one-liner
+    // still animates instead of flashing. `prefers-reduced-motion` bypasses the
+    // animation entirely (see typeBubbleMessage).
+    var CHAR_MS = 35;
+    var CHAR_MS_MIN = 12;
+    var TYPING_MAX_TOTAL_MS = 18000;
+    var TYPING_MIN_TOTAL_MS = 700;
 
     function bubbleIsMessage() {
         return typeof activeBubbleText === "string" && activeBubbleText.length > 0;
@@ -520,11 +533,17 @@
     function setBubbleContent(node, idle) {
         // Any real bubble content replaces the idle-suggestion nudge.
         hideIdleSuggestions();
+        // Resolve any reveal still in flight (skip it) so its promise can never
+        // hang when the bubble is overwritten mid-typing.
+        if (typingSkip) {
+            typingSkip();
+        }
         if (typeTimer) {
             window.clearInterval(typeTimer);
             typeTimer = null;
         }
         bubbleTextEl.classList.remove("bubble-msg-leaving");
+        bubbleTextEl.classList.remove("is-typing");
         if (idle) {
             bubbleTextEl.classList.add("is-idle");
         } else {
@@ -636,37 +655,144 @@
         setBubbleContent(frag, false);
     }
 
-    // Print a BarklAI message into the bubble word by word (typewriter fade).
-    // Words are inserted with textContent inside <span>s => injection-safe.
-    function typeBubbleMessage(text, sources) {
-        return new Promise(function (resolve) {
-            var words = text.split(" ");
-            var index = 0;
-            activeBubbleText = text;
-            activeBubbleSources = sources || [];
-            setBubbleContent(document.createTextNode(""), false);
-            if (words.length === 1 && words[0] === "") {
-                resolve();
+    // Inline emphasis: the agent MAY wrap a few KEY CONCEPTS in **double
+    // asterisks** (a technology, a role, a number). Split a message into the
+    // literal runs between those markers, tagging each as bold or not. A lone or
+    // unbalanced ** stays literal text, and a message with none yields a single
+    // plain run — so a reply without emphasis renders exactly as it always did.
+    function parseRichSegments(text) {
+        var segments = [];
+        var pattern = /\*\*([^*\n]+?)\*\*/g; // no nested "*", never crosses a line
+        var last = 0;
+        var match;
+        while ((match = pattern.exec(text)) !== null) {
+            if (match.index > last) {
+                segments.push({ text: text.slice(last, match.index), bold: false });
+            }
+            segments.push({ text: match[1], bold: true });
+            last = pattern.lastIndex;
+        }
+        if (last < text.length) {
+            segments.push({ text: text.slice(last), bold: false });
+        }
+        return segments;
+    }
+
+    // Build a DocumentFragment of text nodes + <strong>s from a message. All
+    // content goes in through textContent, so a hostile reply can never inject
+    // markup (no innerHTML anywhere) — the only element we ever create is <strong>.
+    function buildRichFragment(text) {
+        var fragment = document.createDocumentFragment();
+        parseRichSegments(text).forEach(function (segment) {
+            if (!segment.text) {
                 return;
             }
-            // Adaptive pace: fast enough for long replies, still legible short ones.
-            var totalMs = Math.min(6000, Math.max(1400, words.length * 45));
-            var delay = Math.max(18, Math.round(totalMs / words.length));
-            typeTimer = window.setInterval(function () {
-                if (index >= words.length) {
-                    window.clearInterval(typeTimer);
-                    typeTimer = null;
-                    appendSourcesToBubble(activeBubbleSources);
-                    bubbleScrollEl.scrollTop = bubbleScrollEl.scrollHeight;
-                    resolve();
+            if (segment.bold) {
+                var strong = document.createElement("strong");
+                strong.textContent = segment.text;
+                fragment.appendChild(strong);
+            } else {
+                fragment.appendChild(document.createTextNode(segment.text));
+            }
+        });
+        return fragment;
+    }
+
+    // Reveal a BarklAI message in the bubble one character at a time, keeping any
+    // **key concepts** bold as they stream. Characters are appended to text nodes
+    // (never one <span> per char: that would create hundreds of nodes on a phone),
+    // a single <strong> stays open across a bold phrase, and a blinking caret shows
+    // through the `is-typing` class until the reveal ends — or is skipped by a tap
+    // on the bubble (typingSkip), or bypassed under `prefers-reduced-motion`.
+    function typeBubbleMessage(text, sources) {
+        return new Promise(function (resolve) {
+            var messageText = text;
+            var messageSources = sources || [];
+            activeBubbleText = messageText;
+            activeBubbleSources = messageSources;
+            setBubbleContent(document.createTextNode(""), false);
+
+            var finished = false;
+
+            // Print whatever is left in one shot and settle the promise. Idempotent,
+            // so a natural end, a tap-to-skip and reduced motion can share it.
+            function finish() {
+                if (finished) {
                     return;
                 }
-                var word = document.createElement("span");
-                word.className = "word-fade";
-                word.textContent = (index > 0 ? " " : "") + words[index];
-                bubbleTextEl.appendChild(word);
+                finished = true;
+                if (typeTimer) {
+                    window.clearInterval(typeTimer);
+                    typeTimer = null;
+                }
+                typingSkip = null;
+                bubbleTextEl.classList.remove("is-typing");
+                bubbleTextEl.textContent = "";
+                bubbleTextEl.appendChild(buildRichFragment(messageText));
+                appendSourcesToBubble(messageSources);
                 bubbleScrollEl.scrollTop = bubbleScrollEl.scrollHeight;
-                index += 1;
+                resolve();
+            }
+            typingSkip = finish;
+
+            var segments = parseRichSegments(messageText).filter(function (segment) {
+                return segment.text;
+            });
+            var reduceMotion =
+                window.matchMedia &&
+                window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+            if (!segments.length || reduceMotion) {
+                finish();
+                return;
+            }
+
+            // One character per tick, compressed only for very long replies so the
+            // whole reveal stays legible without dragging on for a minute.
+            var total = messageText.length;
+            var delay = CHAR_MS;
+            if (total * CHAR_MS > TYPING_MAX_TOTAL_MS) {
+                delay = TYPING_MAX_TOTAL_MS / total;
+            }
+            if (total * delay < TYPING_MIN_TOTAL_MS) {
+                delay = TYPING_MIN_TOTAL_MS / total;
+            }
+            delay = Math.max(CHAR_MS_MIN, Math.round(delay));
+
+            // Streaming state: which run/character we are on, and the nodes the
+            // current run writes into (a <strong> while bold, a text node otherwise).
+            var segIndex = 0;
+            var charIndex = 0;
+            var currentStrong = null;
+            var currentTextNode = null;
+            bubbleTextEl.classList.add("is-typing");
+
+            typeTimer = window.setInterval(function () {
+                if (segIndex >= segments.length) {
+                    finish();
+                    return;
+                }
+                var segment = segments[segIndex];
+                if (segment.bold) {
+                    if (!currentStrong) {
+                        currentStrong = document.createElement("strong");
+                        currentTextNode = document.createTextNode("");
+                        currentStrong.appendChild(currentTextNode);
+                        bubbleTextEl.appendChild(currentStrong);
+                    }
+                } else if (!currentTextNode || currentStrong) {
+                    currentStrong = null;
+                    currentTextNode = document.createTextNode("");
+                    bubbleTextEl.appendChild(currentTextNode);
+                }
+                currentTextNode.data += segment.text.charAt(charIndex);
+                charIndex += 1;
+                if (charIndex >= segment.text.length) {
+                    segIndex += 1;
+                    charIndex = 0;
+                    currentStrong = null;
+                    currentTextNode = null;
+                }
+                bubbleScrollEl.scrollTop = bubbleScrollEl.scrollHeight;
             }, delay);
         });
     }
@@ -700,7 +826,9 @@
 
         var text = document.createElement("p");
         text.className = "whitespace-pre-wrap";
-        text.textContent = content; // textContent prevents HTML injection.
+        // Rich text built from text nodes + <strong> only (never innerHTML): the
+        // agent's **key concepts** become bold, everything else stays literal.
+        text.appendChild(buildRichFragment(content));
 
         bubble.appendChild(meta);
         bubble.appendChild(text);
@@ -1414,7 +1542,7 @@
             } else if (bubbleContent !== null) {
                 activeBubbleText = bubbleContent;
                 activeBubbleSources = bubbleSources;
-                setBubbleContent(document.createTextNode(bubbleContent), false);
+                setBubbleContent(buildRichFragment(bubbleContent), false);
                 appendSourcesToBubble(bubbleSources);
                 setMascotState(data.interview_requested ? "celebrating" : "idle");
             } else if (!onboardingBusy) {
@@ -1592,6 +1720,16 @@
                     contactSaveBtn.disabled = false;
                 }
             });
+        });
+    }
+
+    // A tap on the bubble while BarklAI is still typing prints the rest of the
+    // reply at once — the smallest, most discoverable "skip" a phone offers.
+    if (bubbleScrollEl) {
+        bubbleScrollEl.addEventListener("click", function () {
+            if (typingSkip) {
+                typingSkip();
+            }
         });
     }
 

@@ -147,10 +147,27 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* Word-by-word typewriter fade (reused inside the live speech bubble).*/
+/* Character-by-character reveal in the live speech bubble.           */
 /* ------------------------------------------------------------------ */
-.word-fade { opacity: 0; animation: wordIn .3s ease forwards; }
-@keyframes wordIn { to { opacity: 1; } }
+/* A blinking caret rides at the end of the text while BarklAI "speaks";
+ * `is-typing` is toggled by chat.js and removed the moment the reply is
+ * complete (or skipped). The inline emphasis the agent marks with **...**
+ * arrives as <strong>, made heavier than the surrounding prose so a key
+ * concept pops. Both effects defer to `prefers-reduced-motion`, where the
+ * reply is printed in one shot and `is-typing` is never added. */
+#speech-bubble-text.is-typing::after {
+    content: "▌";
+    margin-left: 1px;
+    font-weight: 400;
+    color: #d97706; /* amber-600, the palette's accent */
+    animation: caretBlink 1s steps(2, start) infinite;
+}
+@keyframes caretBlink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+    #speech-bubble-text.is-typing::after { animation: none; }
+}
+#speech-bubble-text strong,
+#message-list strong { font-weight: 800; }
 
 /* ------------------------------------------------------------------ */
 /* Comic speech bubble + message hand-off transitions.                 */
